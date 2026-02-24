@@ -1,0 +1,36 @@
+{
+  "name": "@pendo/openfeature-web-provider",
+  "version": "0.1.0",
+  "description": "OpenFeature provider for Pendo feature flags (web/browser)",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint src"
+  },
+  "peerDependencies": {
+    "@openfeature/web-sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@openfeature/web-sdk": "^1.0.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "keywords": [
+    "openfeature",
+    "feature-flags",
+    "pendo",
+    "provider"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pendo-io/pendo-flags.git",
+    "directory": "packages/web-provider"
+  }
+}
