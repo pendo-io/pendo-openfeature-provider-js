@@ -25,7 +25,7 @@ export interface PendoTelemetryHookOptions {
  * This hook sends an event to Pendo after each flag evaluation, allowing you
  * to analyze feature flag usage alongside your other Pendo analytics.
  *
- * The hook uses the Pendo agent's track function, so the Pendo agent must be
+ * The hook uses the Pendo Web SDK's track function, so the Pendo Web SDK must be
  * initialized on the page for tracking to work.
  *
  * @example
@@ -67,7 +67,7 @@ export class PendoTelemetryHook implements Hook {
       return;
     }
 
-    // Check if Pendo agent is available
+    // Check if Pendo Web SDK is available
     if (typeof window === "undefined" || !window.pendo?.track) {
       return;
     }
@@ -80,7 +80,7 @@ export class PendoTelemetryHook implements Hook {
       provider_name: hookContext.providerMetadata.name,
     };
 
-    // Fire-and-forget: delegate to Pendo agent
+    // Fire-and-forget: delegate to Pendo Web SDK
     window.pendo.track(this.options.eventName, properties);
   }
 

@@ -10,12 +10,12 @@ npm install @pendo/openfeature-web-provider @openfeature/web-sdk
 
 ## Prerequisites
 
-The Pendo agent must be installed on your page. The provider reads flags from `window.pendo.segmentFlags` which is populated by the agent.
+The Pendo Web SDK must be installed on your page. The provider reads flags from `window.pendo.segmentFlags` which is populated by the SDK.
 
 ```html
 <script>
   (function(apiKey){
-    // Pendo agent snippet
+    // Pendo Web SDK snippet
     // ...
   })('YOUR_PENDO_API_KEY');
 </script>
@@ -29,7 +29,7 @@ The Pendo agent must be installed on your page. The provider reads flags from `w
 import { OpenFeature } from '@openfeature/web-sdk';
 import { PendoProvider } from '@pendo/openfeature-web-provider';
 
-// Initialize the provider (waits for Pendo agent to be ready)
+// Initialize the provider (waits for the Pendo Web SDK to be ready)
 await OpenFeature.setProviderAndWait(new PendoProvider());
 
 // Get a client
@@ -64,7 +64,7 @@ await OpenFeature.setProviderAndWait(provider);
 provider.track('checkout_started', undefined, { cartValue: '99.99' });
 
 // The context parameter is ignored in the web provider
-// since the Pendo agent already knows the current visitor
+// since the Pendo Web SDK already knows the current visitor
 provider.track('feature_used');
 ```
 
@@ -114,20 +114,20 @@ const provider = new PendoProvider({
   // API key for Pendo initialization (optional if already initialized)
   apiKey: 'YOUR_API_KEY',
 
-  // Timeout waiting for Pendo agent to be ready (default: 5000ms)
+  // Timeout waiting for the Pendo Web SDK to be ready (default: 5000ms)
   readyTimeout: 10000,
 });
 ```
 
 ## How It Works
 
-1. The provider waits for the Pendo agent to initialize
+1. The provider waits for the Pendo Web SDK to initialize
 2. Flag evaluation checks if the flag key exists in `window.pendo.segmentFlags`
 3. If the flag key is present, the flag is enabled; otherwise, it returns the default value
 
 ## Context
 
-The web provider does not require explicit context for flag evaluation since the Pendo agent maintains visitor/account identity automatically. However, you can pass context for consistency with the OpenFeature API:
+The web provider does not require explicit context for flag evaluation since the Pendo Web SDK maintains visitor/account identity automatically. However, you can pass context for consistency with the OpenFeature API:
 
 ```typescript
 const enabled = await client.getBooleanValue('my-flag', false, {
@@ -148,7 +148,7 @@ const enabled = await client.getBooleanValue('my-flag', false, {
 
 ### Flags always return default values
 
-1. Check that the Pendo agent is properly installed and initialized
+1. Check that the Pendo Web SDK is properly installed and initialized
 2. Verify the visitor is in a segment that has the flag enabled
 3. Check browser console for `[PendoProvider]` warnings
 
@@ -162,7 +162,7 @@ new PendoProvider({ readyTimeout: 15000 });
 
 ### Track events not appearing
 
-Ensure the Pendo agent's `track` function is available:
+Ensure the Pendo Web SDK's `track` function is available:
 
 ```typescript
 if (window.pendo?.track) {

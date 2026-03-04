@@ -313,7 +313,7 @@ describe('PendoProvider', () => {
       provider.track('event', {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo agent not available')
+        expect.stringContaining('Pendo Web SDK not available')
       );
     });
 
@@ -323,7 +323,7 @@ describe('PendoProvider', () => {
       provider.track('event', {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo agent not available')
+        expect.stringContaining('Pendo Web SDK not available')
       );
     });
   });
