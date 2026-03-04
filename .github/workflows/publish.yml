@@ -29,11 +29,7 @@ jobs:
         run: npm test
 
       - name: Publish server-provider
-        run: npm publish --workspace=@pendo/openfeature-server-provider --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace=@pendo/openfeature-server-provider
 
       - name: Publish web-provider
-        run: npm publish --workspace=@pendo/openfeature-web-provider --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace=@pendo/openfeature-web-provider

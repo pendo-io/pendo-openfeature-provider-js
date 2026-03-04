@@ -116,10 +116,10 @@ export class PendoProvider implements Provider {
         setTimeout(check, 100);
       };
 
-      // Also listen for pendo:ready event
+      // Also listen for pendo_ready event
       if (typeof document !== "undefined") {
         document.addEventListener(
-          "pendo:ready",
+          "pendo_ready",
           () => {
             resolve();
           },
