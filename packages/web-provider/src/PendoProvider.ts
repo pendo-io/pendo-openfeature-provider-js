@@ -38,7 +38,7 @@ export interface PendoProviderOptions {
  * OpenFeature provider for Pendo feature flags.
  *
  * This provider evaluates feature flags by checking the `pendo.segmentFlags` array
- * which is populated by the Pendo agent based on segment membership.
+ * which is populated by the Pendo Web SDK based on segment membership.
  *
  * @example
  * ```typescript
@@ -116,10 +116,10 @@ export class PendoProvider implements Provider {
         setTimeout(check, 100);
       };
 
-      // Also listen for pendo:ready event
+      // Also listen for pendo_ready event
       if (typeof document !== "undefined") {
         document.addEventListener(
-          "pendo:ready",
+          "pendo_ready",
           () => {
             resolve();
           },
@@ -263,11 +263,11 @@ export class PendoProvider implements Provider {
   /**
    * Track a custom event in Pendo.
    *
-   * This method delegates to the Pendo agent's track function.
-   * The Pendo agent must be initialized on the page for this to work.
+   * This method delegates to the Pendo Web SDK's track function.
+   * The Pendo Web SDK must be initialized on the page for this to work.
    *
    * @param trackingEventName - The name of the event to track
-   * @param _context - Evaluation context (unused in web provider, Pendo agent handles visitor context)
+   * @param _context - Evaluation context (unused in web provider, Pendo Web SDK handles visitor context)
    * @param trackingEventDetails - Optional additional event properties
    */
   track(
@@ -276,11 +276,11 @@ export class PendoProvider implements Provider {
     trackingEventDetails: TrackingEventDetails
   ): void {
     if (typeof window === "undefined" || !window.pendo?.track) {
-      console.warn("[PendoProvider] Pendo agent not available for tracking");
+      console.warn("[PendoProvider] Pendo Web SDK not available for tracking");
       return;
     }
 
-    // Convert TrackingEventDetails to Record<string, string> for Pendo agent
+    // Convert TrackingEventDetails to Record<string, string> for Pendo Web SDK
     const properties: Record<string, string> = {};
     for (const [key, value] of Object.entries(trackingEventDetails)) {
       if (value !== undefined && value !== null) {
@@ -288,7 +288,7 @@ export class PendoProvider implements Provider {
       }
     }
 
-    // Fire-and-forget: delegate to Pendo agent
+    // Fire-and-forget: delegate to Pendo Web SDK
     window.pendo.track(trackingEventName, properties);
   }
 }

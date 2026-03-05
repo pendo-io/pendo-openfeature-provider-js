@@ -45,14 +45,14 @@ describe('PendoProvider', () => {
       expect(provider.status).toBe(ClientProviderStatus.READY);
     });
 
-    it('handles pendo:ready event', async () => {
+    it('handles pendo_ready event', async () => {
       (window as any).pendo = {};
 
       const initPromise = provider.initialize();
 
-      // Simulate pendo:ready event after a short delay
+      // Simulate pendo_ready event after a short delay
       setTimeout(() => {
-        document.dispatchEvent(new Event('pendo:ready'));
+        document.dispatchEvent(new Event('pendo_ready'));
       }, 50);
 
       await initPromise;
@@ -313,7 +313,7 @@ describe('PendoProvider', () => {
       provider.track('event', {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo agent not available')
+        expect.stringContaining('Pendo Web SDK not available')
       );
     });
 
@@ -323,7 +323,7 @@ describe('PendoProvider', () => {
       provider.track('event', {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo agent not available')
+        expect.stringContaining('Pendo Web SDK not available')
       );
     });
   });

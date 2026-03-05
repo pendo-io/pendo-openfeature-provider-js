@@ -8,13 +8,23 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:coverage": "jest --coverage",
+    "test:live": "ts-node --require dotenv/config scripts/live-test.ts",
+    "test:web": "npm run test:web:build && npm run test:web:serve",
+    "test:web:build": "esbuild scripts/web-test/test.ts --bundle --outfile=scripts/web-test/test-bundle.js --format=esm --target=es2020",
+    "test:web:serve": "serve scripts/web-test -p 3000",
     "lint": "npm run lint --workspaces"
   },
   "devDependencies": {
+    "@openfeature/server-sdk": "^1.0.0",
+    "@openfeature/web-sdk": "^1.0.0",
     "@types/jest": "^30.0.0",
+    "dotenv": "^16.4.0",
+    "esbuild": "^0.24.0",
+    "serve": "^14.2.0",
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.0",
     "typescript": "^5.3.0"
   }
 }

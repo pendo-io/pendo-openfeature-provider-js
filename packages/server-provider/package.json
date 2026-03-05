@@ -11,7 +11,11 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "pako": "^2.1.0"

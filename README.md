@@ -21,7 +21,7 @@ npm install @pendo/openfeature-web-provider @openfeature/web-sdk
 import { OpenFeature } from '@openfeature/web-sdk';
 import { PendoProvider } from '@pendo/openfeature-web-provider';
 
-// Assumes Pendo agent is already initialized on the page
+// Assumes the Pendo Web SDK is already initialized on the page
 await OpenFeature.setProviderAndWait(new PendoProvider());
 
 const client = OpenFeature.getClient();
@@ -70,15 +70,15 @@ These providers implement the [OpenFeature Provider Specification](https://openf
 | Targeting context | Yes | Yes |
 | Provider lifecycle | Yes | Yes |
 | Event tracking | Yes | Yes |
-| Caching | N/A (Pendo agent) | Yes |
+| Caching | N/A (Pendo Web SDK) | Yes |
 
 ## How It Works
 
 Pendo feature flags are based on **segments**. When a visitor/account matches a segment, the corresponding flag key is included in the `segmentFlags` array.
 
 ### Web Provider
-- Reads flags from `window.pendo.segmentFlags` populated by the Pendo agent
-- Requires the Pendo agent snippet to be installed on the page
+- Reads flags from `window.pendo.segmentFlags` populated by the Pendo Web SDK
+- Requires the Pendo Web SDK snippet to be installed on the page
 
 ### Server Provider
 - Calls Pendo's `/data/segmentflag.json` API with JZB-encoded context
