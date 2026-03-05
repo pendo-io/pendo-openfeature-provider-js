@@ -1,0 +1,153 @@
+version: 2.1
+
+npmjs-npmrc: &npmjs-npmrc
+  name: "Setup NPM config for npmjs.com"
+  command: |
+    rm ~/.npmrc
+    echo "@pendo:registry=https://registry.npmjs.org/" > ~/.npmrc
+    echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}" >> ~/.npmrc
+    echo "//registry.npmjs.org/:email=${NPM_EMAIL}" >> ~/.npmrc
+    echo "//registry.npmjs.org/:username=${NPM_USER}" >> ~/.npmrc
+    echo "//registry.npmjs.org/:always-auth=true" >> ~/.npmrc
+    printf "npm registry configured successfully!\n";
+
+orbs:
+  slack: circleci/slack@3.4.2
+executors:
+  client-executor:
+    docker:
+      - image: us-docker.pkg.dev/pendo-dev/pendo-artifact/circle-tools:node22
+        auth:
+          username: _json_key
+          password: $GCR_JSON_KEY_FILE
+    resource_class: small
+    working_directory: ~/pendo-openfeature-provider-js
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /home/circleci/pendo-openfeature-provider-js/key.json
+
+filter-tag: &filter-tag
+  filters:
+    tags:
+      only: /v(\d)+\.(\d)+\.(\d)+/
+    branches:
+      ignore: /.*/
+
+filter-branch-only: &filter-branch
+  filters:
+    branches:
+      ignore:
+        - main
+
+commands:
+  gh-known-hosts:
+    description: add github's public keys to known_hosts file
+    steps:
+      - run:
+          name: Add github known host public key
+          command: |
+            mkdir -p ~/.ssh
+            touch ~/.ssh/known_hosts
+            cat >> ~/.ssh/known_hosts \<<EOF
+            github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+            EOF
+
+  publish-npm:
+    steps:
+      - run: *npmjs-npmrc
+      - run:
+          name: Publishing server-provider
+          command: |
+              npm publish --workspace=@pendo/openfeature-server-provider
+      - run:
+          name: Publish web-provider
+          command: |
+              npm publish --workspace=@pendo/openfeature-web-provider
+
+  run-unit-tests:
+    steps:
+      - run:
+          name: Run unit tests
+          command: npm run test
+
+jobs:
+  setup:
+    executor: client-executor
+    steps:
+      - checkout:
+          path: ~/pendo-openfeature-provider-js
+      - gh-known-hosts
+      - run:
+          name: Setup npm auth
+          command: |
+              echo "Configuring npm client for @pendo bintray packages..."
+              if [ -z "$ARTIFACTORY_TOKEN" ]; then
+                echo "ARTIFACTORY_TOKEN NOT SET" && exit 1;
+              else
+                echo "@pendo:registry=https://pendo.jfrog.io/artifactory/api/npm/web/" > ~/.npmrc;
+                echo "//pendo.jfrog.io/artifactory/api/npm/web/:_authToken=${ARTIFACTORY_TOKEN}" >> ~/.npmrc
+                echo "//pendo.jfrog.io/artifactory/api/npm/web/:email=team-ops@pendo.io" >> ~/.npmrc
+                echo "//pendo.jfrog.io/artifactory/api/npm/web/:always-auth=true" >> ~/.npmrc
+
+                printf "artifactory registry configured successfully!\n";
+              fi
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - persist_to_workspace:
+          root: /home/circleci
+          paths:
+            - .npmrc
+            - pendo-openfeature-provider-js
+
+  test:
+    executor: client-executor
+    resource_class: large
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - run-unit-tests
+
+
+  publish:
+    executor: client-executor
+    resource_class: large
+    steps:
+      - attach_workspace:
+          at: /home/circleci
+      - publish-npm
+
+workflows:
+  development:
+    jobs:
+      - setup:
+          context:
+            - artifactory-web
+            - gcr-registry-reader
+          <<: *filter-branch
+      - test:
+          context:
+            - gcr-registry-reader
+          requires:
+            - setup
+
+  publish:
+    jobs:
+      - setup:
+          context:
+            - artifactory-web
+            - gcr-registry-reader
+          <<: *filter-tag
+      - test:
+          <<: *filter-tag
+          context:
+            - gcr-registry-reader
+          requires:
+            - setup
+      - publish:
+          <<: *filter-tag
+          context:
+            - artifactory-web
+            - npmjs-prod
+            - gcr-registry-reader
+          requires:
+            - test
