@@ -1,11 +1,27 @@
 /**
  * @jest-environment jsdom
  */
-import { PendoProvider } from '../src/PendoProvider';
-import { ClientProviderStatus } from '@openfeature/web-sdk';
+import { PendoProvider } from "../src/PendoProvider";
+import { ClientProviderStatus, ProviderEvents } from "@openfeature/web-sdk";
 
-describe('PendoProvider', () => {
+describe("PendoProvider", () => {
   let provider: PendoProvider;
+
+  // Helper to create mock Pendo Events
+  const createMockEvents = () => {
+    const handlers: Array<(data?: unknown) => void> = [];
+    return {
+      segmentFlagsUpdated: {
+        on: jest.fn((handler: (data?: unknown) => void) => handlers.push(handler)),
+        off: jest.fn((handler: (data?: unknown) => void) => {
+          const idx = handlers.indexOf(handler);
+          if (idx >= 0) handlers.splice(idx, 1);
+        }),
+        trigger: (data?: unknown) => handlers.forEach((h) => h(data)),
+        _handlers: handlers,
+      },
+    };
+  };
 
   beforeEach(() => {
     // Reset window.pendo
@@ -18,17 +34,17 @@ describe('PendoProvider', () => {
     jest.useRealTimers();
   });
 
-  describe('metadata', () => {
-    it('has correct provider name', () => {
-      expect(provider.metadata.name).toBe('pendo-provider');
+  describe("metadata", () => {
+    it("has correct provider name", () => {
+      expect(provider.metadata.name).toBe("pendo-provider");
     });
   });
 
-  describe('initialize', () => {
-    it('sets status to READY when pendo.isReady() returns true', async () => {
+  describe("initialize", () => {
+    it("sets status to READY when pendo.isReady() returns true", async () => {
       (window as any).pendo = {
         isReady: () => true,
-        segmentFlags: ['flag1'],
+        segmentFlags: ["flag1"],
       };
 
       expect(provider.status).toBe(ClientProviderStatus.NOT_READY);
@@ -36,31 +52,31 @@ describe('PendoProvider', () => {
       expect(provider.status).toBe(ClientProviderStatus.READY);
     });
 
-    it('sets status to READY when segmentFlags is defined', async () => {
+    it("sets status to READY when segmentFlags is defined", async () => {
       (window as any).pendo = {
-        segmentFlags: ['flag1'],
+        segmentFlags: ["flag1"],
       };
 
       await provider.initialize();
       expect(provider.status).toBe(ClientProviderStatus.READY);
     });
 
-    it('handles pendo_ready event', async () => {
+    it("handles pendo_ready event", async () => {
       (window as any).pendo = {};
 
       const initPromise = provider.initialize();
 
       // Simulate pendo_ready event after a short delay
       setTimeout(() => {
-        document.dispatchEvent(new Event('pendo_ready'));
+        document.dispatchEvent(new Event("pendo_ready"));
       }, 50);
 
       await initPromise;
       expect(provider.status).toBe(ClientProviderStatus.READY);
     });
 
-    it('times out gracefully when pendo is not ready', async () => {
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    it("times out gracefully when pendo is not ready", async () => {
+      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
 
       const shortTimeoutProvider = new PendoProvider({
         readyTimeout: 100,
@@ -68,27 +84,90 @@ describe('PendoProvider', () => {
 
       await shortTimeoutProvider.initialize();
 
-      expect(provider.status).toBe(ClientProviderStatus.NOT_READY);
+      expect(shortTimeoutProvider.status).toBe(ClientProviderStatus.READY);
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo not ready within timeout')
+        expect.stringContaining("Pendo not ready within timeout")
       );
     });
 
-    it('only initializes once', async () => {
+    it("sets up flag change detection via segmentFlagsUpdated event", async () => {
+      const mockEvents = createMockEvents();
       (window as any).pendo = {
         isReady: () => true,
+        segmentFlags: [],
+        Events: mockEvents,
       };
 
       await provider.initialize();
+
+      // Verify we subscribed to segmentFlagsUpdated
+      expect(mockEvents.segmentFlagsUpdated.on).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it("sets up flag change detection when pendo loads after timeout", async () => {
+      jest.spyOn(console, "warn").mockImplementation();
+
+      const shortTimeoutProvider = new PendoProvider({
+        readyTimeout: 50,
+      });
+
+      // Initialize without pendo - will timeout
+      await shortTimeoutProvider.initialize();
+      expect(shortTimeoutProvider.status).toBe(ClientProviderStatus.READY);
+
+      // Now pendo loads late with Events
+      const mockEvents = createMockEvents();
+      (window as any).pendo = {
+        isReady: () => true,
+        segmentFlags: ["late-flag"],
+        Events: mockEvents,
+      };
+
+      // Simulate pendo_ready event
+      document.dispatchEvent(new Event("pendo_ready"));
+
+      // Verify we subscribed to the event after late load
+      expect(mockEvents.segmentFlagsUpdated.on).toHaveBeenCalled();
+    });
+  });
+
+  describe("flag change detection", () => {
+    it("emits ConfigurationChanged when segmentFlagsUpdated is triggered", async () => {
+      const mockEvents = createMockEvents();
+      (window as any).pendo = {
+        isReady: () => true,
+        segmentFlags: [],
+        Events: mockEvents,
+      };
+
       await provider.initialize();
 
+      const eventSpy = jest.fn();
+      provider.events.addHandler(ProviderEvents.ConfigurationChanged, eventSpy);
+
+      // Simulate Pendo triggering segmentFlagsUpdated
+      mockEvents.segmentFlagsUpdated.trigger(["new-flag"]);
+
+      expect(eventSpy).toHaveBeenCalled();
+    });
+
+    it("does not set up detection if Events.segmentFlagsUpdated is not available", async () => {
+      (window as any).pendo = {
+        isReady: () => true,
+        segmentFlags: [],
+        // No Events property
+      };
+
+      await provider.initialize();
+
+      // Should still be ready, just without event detection
       expect(provider.status).toBe(ClientProviderStatus.READY);
     });
   });
 
-  describe('onClose', () => {
-    it('sets status to NOT_READY', async () => {
-      (window as any).pendo = { isReady: () => true };
+  describe("onClose", () => {
+    it("sets status to NOT_READY", async () => {
+      (window as any).pendo = { isReady: () => true, segmentFlags: [] };
 
       await provider.initialize();
       expect(provider.status).toBe(ClientProviderStatus.READY);
@@ -96,157 +175,215 @@ describe('PendoProvider', () => {
       await provider.onClose();
       expect(provider.status).toBe(ClientProviderStatus.NOT_READY);
     });
+
+    it("unsubscribes from segmentFlagsUpdated event", async () => {
+      const mockEvents = createMockEvents();
+      (window as any).pendo = {
+        isReady: () => true,
+        segmentFlags: [],
+        Events: mockEvents,
+      };
+
+      await provider.initialize();
+      expect(mockEvents.segmentFlagsUpdated.on).toHaveBeenCalled();
+
+      await provider.onClose();
+      expect(mockEvents.segmentFlagsUpdated.off).toHaveBeenCalled();
+    });
+
+    it("stops emitting events after close", async () => {
+      const mockEvents = createMockEvents();
+      (window as any).pendo = {
+        isReady: () => true,
+        segmentFlags: [],
+        Events: mockEvents,
+      };
+
+      await provider.initialize();
+
+      const eventSpy = jest.fn();
+      provider.events.addHandler(ProviderEvents.ConfigurationChanged, eventSpy);
+
+      await provider.onClose();
+
+      // Triggering the event should not emit ConfigurationChanged
+      // because we unsubscribed
+      mockEvents.segmentFlagsUpdated.trigger(["new-flag"]);
+
+      expect(eventSpy).not.toHaveBeenCalled();
+    });
   });
 
-  describe('resolveBooleanEvaluation', () => {
+  describe("resolveBooleanEvaluation", () => {
     beforeEach(async () => {
       (window as any).pendo = {
         isReady: () => true,
-        segmentFlags: ['feature-a', 'feature-b'],
+        segmentFlags: ["feature-a", "feature-b"],
       };
       await provider.initialize();
     });
 
-    it('returns true when flag is in segmentFlags', () => {
-      const result = provider.resolveBooleanEvaluation('feature-a', false, {});
+    it("returns true when flag is in segmentFlags", () => {
+      const result = provider.resolveBooleanEvaluation("feature-a", false, {});
 
       expect(result.value).toBe(true);
-      expect(result.reason).toBe('TARGETING_MATCH');
-      expect(result.variant).toBe('on');
+      expect(result.reason).toBe("TARGETING_MATCH");
+      expect(result.variant).toBe("on");
     });
 
-    it('returns false when flag is not in segmentFlags', () => {
-      const result = provider.resolveBooleanEvaluation('feature-c', false, {});
+    it("returns false when flag is not in segmentFlags", () => {
+      const result = provider.resolveBooleanEvaluation("feature-c", false, {});
 
       expect(result.value).toBe(false);
-      expect(result.reason).toBe('DEFAULT');
-      expect(result.variant).toBe('off');
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("off");
     });
 
-    it('returns default when pendo is undefined', () => {
+    it("returns default when pendo is undefined", () => {
       delete (window as any).pendo;
 
-      const result = provider.resolveBooleanEvaluation('feature-a', true, {});
+      const result = provider.resolveBooleanEvaluation("feature-a", true, {});
 
       expect(result.value).toBe(true);
-      expect(result.reason).toBe('DEFAULT');
-      expect(result.variant).toBe('default');
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("default");
     });
 
-    it('returns default when segmentFlags is undefined', () => {
+    it("returns default when segmentFlags is undefined", () => {
       (window as any).pendo = { isReady: () => true };
 
-      const result = provider.resolveBooleanEvaluation('feature-a', true, {});
+      const result = provider.resolveBooleanEvaluation("feature-a", true, {});
 
       expect(result.value).toBe(true);
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("default");
+    });
+
+    it("returns default when segmentFlags is null (identity cleared)", () => {
+      (window as any).pendo.segmentFlags = null;
+
+      const result = provider.resolveBooleanEvaluation("feature-a", true, {});
+
+      expect(result.value).toBe(true);
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("default");
+    });
+
+    it("returns false when segmentFlags is empty array", () => {
+      (window as any).pendo.segmentFlags = [];
+
+      const result = provider.resolveBooleanEvaluation("feature-a", true, {});
+
+      expect(result.value).toBe(false);
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("off");
     });
   });
 
-  describe('resolveStringEvaluation', () => {
+  describe("resolveStringEvaluation", () => {
     beforeEach(async () => {
       (window as any).pendo = {
         isReady: () => true,
-        segmentFlags: ['feature-a'],
+        segmentFlags: ["feature-a"],
       };
       await provider.initialize();
     });
 
     it('returns "on" when flag is enabled', () => {
-      const result = provider.resolveStringEvaluation('feature-a', 'default', {});
+      const result = provider.resolveStringEvaluation("feature-a", "default", {});
 
-      expect(result.value).toBe('on');
-      expect(result.reason).toBe('TARGETING_MATCH');
+      expect(result.value).toBe("on");
+      expect(result.reason).toBe("TARGETING_MATCH");
     });
 
-    it('returns default when flag is disabled', () => {
-      const result = provider.resolveStringEvaluation('feature-b', 'default-value', {});
+    it("returns default when flag is disabled", () => {
+      const result = provider.resolveStringEvaluation("feature-b", "default-value", {});
 
-      expect(result.value).toBe('default-value');
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.value).toBe("default-value");
+      expect(result.reason).toBe("DEFAULT");
     });
 
-    it('returns default when pendo is unavailable', () => {
+    it("returns default when pendo is unavailable", () => {
       delete (window as any).pendo;
 
-      const result = provider.resolveStringEvaluation('feature-a', 'my-default', {});
+      const result = provider.resolveStringEvaluation("feature-a", "my-default", {});
 
-      expect(result.value).toBe('my-default');
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.value).toBe("my-default");
+      expect(result.reason).toBe("DEFAULT");
     });
   });
 
-  describe('resolveNumberEvaluation', () => {
+  describe("resolveNumberEvaluation", () => {
     beforeEach(async () => {
       (window as any).pendo = {
         isReady: () => true,
-        segmentFlags: ['feature-a'],
+        segmentFlags: ["feature-a"],
       };
       await provider.initialize();
     });
 
-    it('returns 1 when flag is enabled', () => {
-      const result = provider.resolveNumberEvaluation('feature-a', 0, {});
+    it("returns 1 when flag is enabled", () => {
+      const result = provider.resolveNumberEvaluation("feature-a", 0, {});
 
       expect(result.value).toBe(1);
-      expect(result.reason).toBe('TARGETING_MATCH');
+      expect(result.reason).toBe("TARGETING_MATCH");
     });
 
-    it('returns 0 when flag is disabled', () => {
-      const result = provider.resolveNumberEvaluation('feature-b', 0, {});
+    it("returns 0 when flag is disabled", () => {
+      const result = provider.resolveNumberEvaluation("feature-b", 0, {});
 
       expect(result.value).toBe(0);
     });
 
-    it('returns default when pendo is unavailable', () => {
+    it("returns default when pendo is unavailable", () => {
       delete (window as any).pendo;
 
-      const result = provider.resolveNumberEvaluation('feature-a', 42, {});
+      const result = provider.resolveNumberEvaluation("feature-a", 42, {});
 
       expect(result.value).toBe(42);
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.reason).toBe("DEFAULT");
     });
   });
 
-  describe('resolveObjectEvaluation', () => {
+  describe("resolveObjectEvaluation", () => {
     beforeEach(async () => {
       (window as any).pendo = {
         isReady: () => true,
-        segmentFlags: ['feature-a'],
+        segmentFlags: ["feature-a"],
       };
       await provider.initialize();
     });
 
-    it('returns { enabled: true } when flag is enabled', () => {
-      const result = provider.resolveObjectEvaluation('feature-a', { enabled: false }, {});
+    it("returns { enabled: true } when flag is enabled", () => {
+      const result = provider.resolveObjectEvaluation("feature-a", { enabled: false }, {});
 
       expect(result.value).toEqual({ enabled: true });
-      expect(result.reason).toBe('TARGETING_MATCH');
+      expect(result.reason).toBe("TARGETING_MATCH");
     });
 
-    it('returns { enabled: false } when flag is disabled', () => {
-      const result = provider.resolveObjectEvaluation('feature-b', { enabled: false }, {});
+    it("returns { enabled: false } when flag is disabled", () => {
+      const result = provider.resolveObjectEvaluation("feature-b", { enabled: false }, {});
 
       expect(result.value).toEqual({ enabled: false });
     });
 
-    it('returns default when pendo is unavailable', () => {
+    it("returns default when pendo is unavailable", () => {
       delete (window as any).pendo;
 
-      const result = provider.resolveObjectEvaluation('feature-a', { custom: 'value' }, {});
+      const result = provider.resolveObjectEvaluation("feature-a", { custom: "value" }, {});
 
-      expect(result.value).toEqual({ custom: 'value' });
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.value).toEqual({ custom: "value" });
+      expect(result.reason).toBe("DEFAULT");
     });
   });
 
-  describe('track', () => {
+  describe("track", () => {
     let mockTrack: jest.Mock;
     let consoleWarnSpy: jest.SpyInstance;
 
     beforeEach(async () => {
       mockTrack = jest.fn();
-      consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
 
       (window as any).pendo = {
         isReady: () => true,
@@ -256,101 +393,89 @@ describe('PendoProvider', () => {
       await provider.initialize();
     });
 
-    it('delegates to pendo.track', () => {
-      provider.track(
-        'button_clicked',
-        { targetingKey: 'user-123' },
-        { value: 42 }
-      );
+    it("delegates to pendo.track", () => {
+      provider.track("button_clicked", { targetingKey: "user-123" }, { value: 42 });
 
-      expect(mockTrack).toHaveBeenCalledWith(
-        'button_clicked',
-        { value: '42' }
-      );
+      expect(mockTrack).toHaveBeenCalledWith("button_clicked", { value: "42" });
     });
 
-    it('converts properties to strings', () => {
+    it("converts properties to strings", () => {
       provider.track(
-        'event',
+        "event",
         {},
         {
-          stringProp: 'hello',
+          stringProp: "hello",
           numberProp: 123,
           boolProp: true,
         }
       );
 
-      expect(mockTrack).toHaveBeenCalledWith(
-        'event',
-        {
-          stringProp: 'hello',
-          numberProp: '123',
-          boolProp: 'true',
-        }
-      );
+      expect(mockTrack).toHaveBeenCalledWith("event", {
+        stringProp: "hello",
+        numberProp: "123",
+        boolProp: "true",
+      });
     });
 
-    it('omits null and undefined properties', () => {
+    it("omits null and undefined properties", () => {
       provider.track(
-        'event',
+        "event",
         {},
         {
-          valid: 'value',
+          valid: "value",
           nullProp: null,
           undefinedProp: undefined,
         } as any
       );
 
-      expect(mockTrack).toHaveBeenCalledWith(
-        'event',
-        { valid: 'value' }
-      );
+      expect(mockTrack).toHaveBeenCalledWith("event", { valid: "value" });
     });
 
-    it('warns when pendo.track is not available', () => {
+    it("warns when pendo.track is not available", () => {
       delete (window as any).pendo.track;
 
-      provider.track('event', {}, {});
+      provider.track("event", {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo Web SDK not available')
+        expect.stringContaining("Pendo Web SDK not available")
       );
     });
 
-    it('warns when pendo is not defined', () => {
+    it("warns when pendo is not defined", () => {
       delete (window as any).pendo;
 
-      provider.track('event', {}, {});
+      provider.track("event", {}, {});
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Pendo Web SDK not available')
+        expect.stringContaining("Pendo Web SDK not available")
       );
     });
   });
 
-  describe('edge cases', () => {
-    it('handles empty segmentFlags array', async () => {
+  describe("edge cases", () => {
+    it("handles empty segmentFlags array", async () => {
       (window as any).pendo = {
         isReady: () => true,
         segmentFlags: [],
       };
       await provider.initialize();
 
-      const result = provider.resolveBooleanEvaluation('any-flag', false, {});
+      const result = provider.resolveBooleanEvaluation("any-flag", false, {});
 
       expect(result.value).toBe(false);
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.reason).toBe("DEFAULT");
+      expect(result.variant).toBe("off");
     });
 
-    it('handles SSR environment (no window)', () => {
+    it("handles SSR environment (no window)", () => {
       const originalWindow = global.window;
       delete (global as any).window;
 
       const ssrProvider = new PendoProvider();
-      const result = ssrProvider.resolveBooleanEvaluation('flag', true, {});
+      const result = ssrProvider.resolveBooleanEvaluation("flag", true, {});
 
       expect(result.value).toBe(true);
-      expect(result.reason).toBe('DEFAULT');
+      expect(result.reason).toBe("DEFAULT");
 
       (global as any).window = originalWindow;
     });

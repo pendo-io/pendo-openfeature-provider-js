@@ -7,28 +7,16 @@ import type {
   Hook,
   TrackingEventDetails,
 } from "@openfeature/web-sdk";
-import { ClientProviderStatus } from "@openfeature/web-sdk";
-
-declare global {
-  interface Window {
-    pendo?: {
-      segmentFlags?: string[];
-      isReady?: () => boolean;
-      initialize?: (options: unknown) => void;
-      track?: (event: string, properties?: Record<string, string>) => void;
-    };
-  }
-}
+import {
+  ClientProviderStatus,
+  OpenFeatureEventEmitter,
+  ProviderEvents,
+} from "@openfeature/web-sdk";
+import "./types";
 
 export interface PendoProviderOptions {
   /**
-   * Optional: Pendo API key for initialization.
-   * If not provided, assumes Pendo is already initialized on the page.
-   */
-  apiKey?: string;
-
-  /**
-   * Optional: Timeout in milliseconds to wait for Pendo to be ready.
+   * Timeout in milliseconds to wait for Pendo to be ready.
    * Default: 5000ms
    */
   readyTimeout?: number;
@@ -37,18 +25,29 @@ export interface PendoProviderOptions {
 /**
  * OpenFeature provider for Pendo feature flags.
  *
- * This provider evaluates feature flags by checking the `pendo.segmentFlags` array
- * which is populated by the Pendo Web SDK based on segment membership.
+ * This provider integrates with the Pendo Web SDK's segment-flags plugin
+ * to evaluate feature flags based on segment membership.
+ *
+ * Prerequisites:
+ * - Pendo Web SDK must be installed and initialized on the page
+ * - `requestSegmentFlags: true` must be set in the Pendo configuration
  *
  * @example
  * ```typescript
  * import { OpenFeature } from '@openfeature/web-sdk';
  * import { PendoProvider } from '@pendo/openfeature-web-provider';
  *
+ * // Pendo must be initialized with requestSegmentFlags enabled:
+ * // pendo.initialize({
+ * //   visitor: { id: 'user-123' },
+ * //   account: { id: 'account-456' },
+ * //   requestSegmentFlags: true
+ * // });
+ *
  * await OpenFeature.setProviderAndWait(new PendoProvider());
  *
  * const client = OpenFeature.getClient();
- * const enabled = await client.getBooleanValue('myFeature', false);
+ * const enabled = client.getBooleanValue('myFeature', false);
  * ```
  */
 export class PendoProvider implements Provider {
@@ -56,12 +55,13 @@ export class PendoProvider implements Provider {
     name: "pendo-provider",
   };
 
-  readonly rulesChanged?: () => void;
+  readonly events = new OpenFeatureEventEmitter();
   status: ClientProviderStatus = ClientProviderStatus.NOT_READY;
   hooks?: Hook[];
 
-  private options: PendoProviderOptions;
-  private readyPromise: Promise<void> | null = null;
+  private options: Required<PendoProviderOptions>;
+  private flagChangeDetectionSetup = false;
+  private flagChangeHandler: (() => void) | null = null;
 
   constructor(options: PendoProviderOptions = {}) {
     this.options = {
@@ -72,15 +72,20 @@ export class PendoProvider implements Provider {
 
   /**
    * Initialize the provider.
-   * Waits for Pendo to be ready before resolving.
+   * Waits for Pendo to be ready and sets up flag change detection.
    */
   async initialize(): Promise<void> {
-    if (this.readyPromise) {
-      return this.readyPromise;
+    // Listen for pendo_ready to set up detection even if we timeout initially
+    if (typeof document !== "undefined") {
+      document.addEventListener(
+        "pendo_ready",
+        () => this.setupFlagChangeDetection(),
+        { once: true }
+      );
     }
 
-    this.readyPromise = this.waitForPendo();
-    await this.readyPromise;
+    await this.waitForPendo();
+    this.setupFlagChangeDetection();
     this.status = ClientProviderStatus.READY;
   }
 
@@ -88,10 +93,10 @@ export class PendoProvider implements Provider {
    * Wait for Pendo to be ready with timeout.
    */
   private async waitForPendo(): Promise<void> {
-    const timeout = this.options.readyTimeout ?? 5000;
+    const timeout = this.options.readyTimeout;
     const startTime = Date.now();
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const check = () => {
         // Check if pendo is available and ready
         if (typeof window !== "undefined" && window.pendo) {
@@ -103,8 +108,6 @@ export class PendoProvider implements Provider {
 
         // Check timeout
         if (Date.now() - startTime > timeout) {
-          // Don't reject - just resolve and work without Pendo
-          // Flags will default to false
           console.warn(
             "[PendoProvider] Pendo not ready within timeout. Flags will use default values."
           );
@@ -120,9 +123,7 @@ export class PendoProvider implements Provider {
       if (typeof document !== "undefined") {
         document.addEventListener(
           "pendo_ready",
-          () => {
-            resolve();
-          },
+          () => resolve(),
           { once: true }
         );
       }
@@ -132,11 +133,46 @@ export class PendoProvider implements Provider {
   }
 
   /**
+   * Set up detection for when segment flags change.
+   * Listens for the segmentFlagsUpdated event from Pendo.
+   * Idempotent - only runs once.
+   */
+  private setupFlagChangeDetection(): void {
+    if (this.flagChangeDetectionSetup) {
+      return;
+    }
+
+    if (typeof window === "undefined" || !window.pendo?.Events?.segmentFlagsUpdated) {
+      return;
+    }
+
+    this.flagChangeDetectionSetup = true;
+
+    // Create handler and store reference for cleanup
+    this.flagChangeHandler = () => {
+      this.events.emit(ProviderEvents.ConfigurationChanged);
+    };
+
+    // Subscribe to Pendo's segmentFlagsUpdated event
+    window.pendo.Events.segmentFlagsUpdated.on(this.flagChangeHandler);
+  }
+
+  /**
    * Shutdown the provider.
    */
   async onClose(): Promise<void> {
+    // Unsubscribe from Pendo events
+    if (
+      typeof window !== "undefined" &&
+      window.pendo?.Events?.segmentFlagsUpdated &&
+      this.flagChangeHandler
+    ) {
+      window.pendo.Events.segmentFlagsUpdated.off(this.flagChangeHandler);
+    }
+
     this.status = ClientProviderStatus.NOT_READY;
-    this.readyPromise = null;
+    this.flagChangeHandler = null;
+    this.flagChangeDetectionSetup = false;
   }
 
   /**
@@ -151,7 +187,7 @@ export class PendoProvider implements Provider {
   ): ResolutionDetails<boolean> {
     const flags = this.getSegmentFlags();
 
-    if (!flags) {
+    if (flags === null) {
       return {
         value: defaultValue,
         reason: "DEFAULT",
@@ -250,25 +286,9 @@ export class PendoProvider implements Provider {
   }
 
   /**
-   * Get the segment flags array from Pendo.
-   */
-  private getSegmentFlags(): string[] | undefined {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    return window.pendo?.segmentFlags;
-  }
-
-  /**
    * Track a custom event in Pendo.
    *
-   * This method delegates to the Pendo Web SDK's track function.
-   * The Pendo Web SDK must be initialized on the page for this to work.
-   *
-   * @param trackingEventName - The name of the event to track
-   * @param _context - Evaluation context (unused in web provider, Pendo Web SDK handles visitor context)
-   * @param trackingEventDetails - Optional additional event properties
+   * Delegates to the Pendo Web SDK's track function.
    */
   track(
     trackingEventName: string,
@@ -288,7 +308,22 @@ export class PendoProvider implements Provider {
       }
     }
 
-    // Fire-and-forget: delegate to Pendo Web SDK
     window.pendo.track(trackingEventName, properties);
+  }
+
+  /**
+   * Get the segment flags array from Pendo.
+   * Returns null if Pendo is not available or flags haven't been loaded.
+   */
+  private getSegmentFlags(): string[] | null {
+    if (typeof window === "undefined" || !window.pendo) {
+      return null;
+    }
+
+    const flags = window.pendo.segmentFlags;
+
+    // Return null if flags haven't been loaded yet (undefined)
+    // Return the array (even if empty) if flags have been loaded
+    return flags === undefined ? null : flags;
   }
 }

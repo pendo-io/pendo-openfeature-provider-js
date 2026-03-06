@@ -10,15 +10,15 @@ npm install @pendo/openfeature-web-provider @openfeature/web-sdk
 
 ## Prerequisites
 
-The Pendo Web SDK must be installed on your page. The provider reads flags from `window.pendo.segmentFlags` which is populated by the SDK.
+The Pendo Web SDK must be installed and initialized on your page with `requestSegmentFlags: true` enabled.
 
-```html
-<script>
-  (function(apiKey){
-    // Pendo Web SDK snippet
-    // ...
-  })('YOUR_PENDO_API_KEY');
-</script>
+```javascript
+// Initialize Pendo with segment flags enabled
+pendo.initialize({
+  visitor: { id: 'user-123' },
+  account: { id: 'account-456' },
+  requestSegmentFlags: true  // Required for feature flags
+});
 ```
 
 ## Usage
@@ -29,7 +29,7 @@ The Pendo Web SDK must be installed on your page. The provider reads flags from 
 import { OpenFeature } from '@openfeature/web-sdk';
 import { PendoProvider } from '@pendo/openfeature-web-provider';
 
-// Initialize the provider (waits for the Pendo Web SDK to be ready)
+// Initialize the provider (waits for Pendo to be ready)
 await OpenFeature.setProviderAndWait(new PendoProvider());
 
 // Get a client
@@ -40,16 +40,16 @@ const client = OpenFeature.getClient();
 
 ```typescript
 // Boolean flag
-const showNewFeature = await client.getBooleanValue('new-checkout-flow', false);
+const showNewFeature = client.getBooleanValue('new-checkout-flow', false);
 
 // String flag (returns "on" or "off")
-const variant = await client.getStringValue('checkout-variant', 'control');
+const variant = client.getStringValue('checkout-variant', 'control');
 
 // Number flag (returns 1 or 0)
-const flagValue = await client.getNumberValue('feature-score', 0);
+const flagValue = client.getNumberValue('feature-score', 0);
 
 // Object flag (returns { enabled: true/false })
-const config = await client.getObjectValue('feature-config', { enabled: false });
+const config = client.getObjectValue('feature-config', { enabled: false });
 ```
 
 ### Event Tracking
@@ -57,18 +57,47 @@ const config = await client.getObjectValue('feature-config', { enabled: false })
 Track custom events to Pendo:
 
 ```typescript
-const provider = new PendoProvider();
-await OpenFeature.setProviderAndWait(provider);
+const client = OpenFeature.getClient();
 
-// Track an event
-provider.track('checkout_started', undefined, { cartValue: '99.99' });
-
-// The context parameter is ignored in the web provider
-// since the Pendo Web SDK already knows the current visitor
-provider.track('feature_used');
+// Track an event (delegates to pendo.track)
+client.track('checkout_started', { cartValue: '99.99' });
 ```
 
-### Telemetry Hook
+### Configuration Options
+
+```typescript
+const provider = new PendoProvider({
+  // Timeout waiting for the Pendo Web SDK to be ready (default: 5000ms)
+  readyTimeout: 10000,
+});
+```
+
+## How It Works
+
+1. The provider waits for the Pendo Web SDK to be ready
+2. Flag evaluation checks if the flag key exists in `pendo.segmentFlags`
+3. When Pendo updates flags (on metadata/identity changes), the provider emits `ConfigurationChanged`
+4. React/Angular OpenFeature SDKs automatically re-render when flags change
+
+## Automatic Flag Updates
+
+The provider subscribes to Pendo's `Events.segmentFlagsUpdated` event to detect when flags are updated. This happens automatically when:
+
+- Pendo initializes and loads initial flags
+- Visitor metadata changes
+- Visitor identity changes (via `pendo.identify()`)
+
+When flags update, the provider emits a `ConfigurationChanged` event, which triggers re-renders in React/Angular SDKs.
+
+## Resolution Details
+
+| Scenario | Reason | Variant |
+|----------|--------|---------|
+| Flag key in segmentFlags | `TARGETING_MATCH` | `on` |
+| Flag key not in segmentFlags | `DEFAULT` | `off` |
+| Pendo not ready / no flags | `DEFAULT` | `default` |
+
+## Telemetry Hook
 
 Automatically track all flag evaluations to Pendo using the telemetry hook:
 
@@ -83,7 +112,7 @@ await OpenFeature.setProviderAndWait(provider);
 OpenFeature.addHooks(telemetryHook);
 ```
 
-#### Telemetry Hook Options
+### Telemetry Hook Options
 
 ```typescript
 const telemetryHook = new PendoTelemetryHook({
@@ -95,62 +124,14 @@ const telemetryHook = new PendoTelemetryHook({
 });
 ```
 
-#### Event Payload
-
-Each flag evaluation sends a track event with these properties:
-
-| Property | Description |
-|----------|-------------|
-| `flag_key` | The flag that was evaluated |
-| `flag_variant` | "on", "off", or variant name |
-| `flag_reason` | "TARGETING_MATCH", "DEFAULT", or "ERROR" |
-| `flag_value` | Stringified value |
-| `provider_name` | "pendo-provider" |
-
-### Configuration Options
-
-```typescript
-const provider = new PendoProvider({
-  // API key for Pendo initialization (optional if already initialized)
-  apiKey: 'YOUR_API_KEY',
-
-  // Timeout waiting for the Pendo Web SDK to be ready (default: 5000ms)
-  readyTimeout: 10000,
-});
-```
-
-## How It Works
-
-1. The provider waits for the Pendo Web SDK to initialize
-2. Flag evaluation checks if the flag key exists in `window.pendo.segmentFlags`
-3. If the flag key is present, the flag is enabled; otherwise, it returns the default value
-
-## Context
-
-The web provider does not require explicit context for flag evaluation since the Pendo Web SDK maintains visitor/account identity automatically. However, you can pass context for consistency with the OpenFeature API:
-
-```typescript
-const enabled = await client.getBooleanValue('my-flag', false, {
-  targetingKey: 'user-123',  // Ignored by web provider
-  accountId: 'account-456',  // Ignored by web provider
-});
-```
-
-## Resolution Details
-
-| Scenario | Reason | Variant |
-|----------|--------|---------|
-| Flag key in segmentFlags | `TARGETING_MATCH` | `on` |
-| Flag key not in segmentFlags | `DEFAULT` | `off` |
-| Pendo not ready | `DEFAULT` | `default` |
-
 ## Troubleshooting
 
 ### Flags always return default values
 
-1. Check that the Pendo Web SDK is properly installed and initialized
-2. Verify the visitor is in a segment that has the flag enabled
-3. Check browser console for `[PendoProvider]` warnings
+1. Ensure `requestSegmentFlags: true` is set in your Pendo initialization
+2. Check that Pendo is properly initialized before the provider
+3. Verify the visitor is in a segment with the flag enabled
+4. Check browser console for `[PendoProvider]` warnings
 
 ### Provider times out
 
@@ -160,15 +141,13 @@ Increase the `readyTimeout` option:
 new PendoProvider({ readyTimeout: 15000 });
 ```
 
-### Track events not appearing
+### Flags not updating
 
-Ensure the Pendo Web SDK's `track` function is available:
+The provider automatically detects flag changes. If flags aren't updating:
 
-```typescript
-if (window.pendo?.track) {
-  provider.track('my-event');
-}
-```
+1. Verify Pendo is receiving metadata/identity updates
+2. Check that `requestSegmentFlags: true` is enabled
+3. Ensure your segments are configured correctly in Pendo
 
 ## License
 
