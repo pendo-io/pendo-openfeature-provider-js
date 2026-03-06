@@ -8,6 +8,19 @@ OpenFeature provider for [Pendo](https://www.pendo.io/) feature flags in web bro
 npm install @pendo/openfeature-web-provider @openfeature/web-sdk
 ```
 
+## Prerequisites
+
+The Pendo Web SDK must be installed and initialized on your page with `requestSegmentFlags: true` enabled.
+
+```javascript
+// Initialize Pendo with segment flags enabled
+pendo.initialize({
+  visitor: { id: 'user-123' },
+  account: { id: 'account-456' },
+  requestSegmentFlags: true  // Required for feature flags
+});
+```
+
 ## Usage
 
 ### Basic Setup
@@ -16,16 +29,8 @@ npm install @pendo/openfeature-web-provider @openfeature/web-sdk
 import { OpenFeature } from '@openfeature/web-sdk';
 import { PendoProvider } from '@pendo/openfeature-web-provider';
 
-// Set context first (required for API call)
-await OpenFeature.setContext({
-  targetingKey: user.id,    // visitorId (required)
-  accountId: org.id,        // accountId (optional)
-});
-
-// Initialize provider with API key
-await OpenFeature.setProviderAndWait(new PendoProvider({
-  apiKey: 'YOUR_PENDO_API_KEY',
-}));
+// Initialize the provider (waits for Pendo to be ready)
+await OpenFeature.setProviderAndWait(new PendoProvider());
 
 // Get a client
 const client = OpenFeature.getClient();
@@ -47,129 +52,102 @@ const flagValue = client.getNumberValue('feature-score', 0);
 const config = client.getObjectValue('feature-config', { enabled: false });
 ```
 
-### Context Changes
+### Event Tracking
 
-When the user changes (e.g., login/logout), update the context:
+Track custom events to Pendo:
 
 ```typescript
-// User logs in
-await OpenFeature.setContext({
-  targetingKey: newUser.id,
-  accountId: newUser.accountId,
-});
+const client = OpenFeature.getClient();
 
-// The provider automatically:
-// 1. Fetches new flags for the new user
-// 2. Emits ConfigurationChanged event
-// 3. React/Angular SDKs re-render components using flags
+// Track an event (delegates to pendo.track)
+client.track('checkout_started', { cartValue: '99.99' });
 ```
 
 ### Configuration Options
 
 ```typescript
 const provider = new PendoProvider({
-  // Required: Pendo API key
-  apiKey: 'YOUR_API_KEY',
-
-  // Optional: Pendo data host for your region (default: https://data.pendo.io)
-  // See "Regional Data Centers" section below
-  baseUrl: 'https://data.pendo.io',
-
-  // Optional: Cache TTL in milliseconds (default: 60000 = 1 minute)
-  cacheTtl: 30000,
+  // Timeout waiting for the Pendo Web SDK to be ready (default: 5000ms)
+  readyTimeout: 10000,
 });
 ```
-
-### Regional Data Centers
-
-Pendo operates multiple regional data centers. You must configure the `baseUrl` to match your subscription's region:
-
-| Region | Base URL |
-|--------|----------|
-| US (default) | `https://data.pendo.io` |
-| EU | `https://data.eu.pendo.io` |
-| US1 | `https://us1.data.pendo.io` |
-| Japan | `https://data.jpn.pendo.io` |
-
-Example for EU customers:
-
-```typescript
-const provider = new PendoProvider({
-  apiKey: 'YOUR_API_KEY',
-  baseUrl: 'https://data.eu.pendo.io',
-});
-```
-
-If you're unsure which region your subscription uses, check your Pendo agent installation snippet or contact Pendo support.
 
 ## How It Works
 
-1. The provider calls Pendo's `segmentflag.json` API directly with visitor/account context
-2. Flag evaluation checks if the flag key exists in the returned segment flags
-3. Results are cached for performance (configurable TTL)
-4. Context changes trigger automatic re-fetch of flags
+1. The provider waits for the Pendo Web SDK to be ready
+2. Flag evaluation checks if the flag key exists in `pendo.segmentFlags`
+3. When Pendo updates flags (on metadata/identity changes), the provider emits `ConfigurationChanged`
+4. React/Angular OpenFeature SDKs automatically re-render when flags change
 
-## Context
+## Automatic Flag Updates
 
-The web provider requires context to be set before initialization:
+The provider subscribes to Pendo's `Events.segmentFlagsUpdated` event to detect when flags are updated. This happens automatically when:
 
-```typescript
-await OpenFeature.setContext({
-  targetingKey: 'user-123',   // Required: Visitor ID
-  accountId: 'account-456',   // Optional: Account ID
-});
-```
+- Pendo initializes and loads initial flags
+- Visitor metadata changes
+- Visitor identity changes (via `pendo.identify()`)
+
+When flags update, the provider emits a `ConfigurationChanged` event, which triggers re-renders in React/Angular SDKs.
 
 ## Resolution Details
 
 | Scenario | Reason | Variant |
 |----------|--------|---------|
-| Flag key in segment flags | `TARGETING_MATCH` | `on` |
-| Flag key not in segment flags | `DEFAULT` | `off` |
-| No flags fetched / no context | `DEFAULT` | `default` |
+| Flag key in segmentFlags | `TARGETING_MATCH` | `on` |
+| Flag key not in segmentFlags | `DEFAULT` | `off` |
+| Pendo not ready / no flags | `DEFAULT` | `default` |
 
-## API Response Handling
+## Telemetry Hook
 
-The provider handles Pendo-specific HTTP status codes:
-
-| Status | Behavior |
-|--------|----------|
-| 200 | Success - use returned flags |
-| 202 | Visitor not yet known - return empty flags |
-| 429 | Rate limited - log error, use defaults |
-| 451 | Visitor opted out - return empty flags |
-
-## Event Tracking
-
-The web provider doesn't support server-side event tracking. If you need to track events, use the Pendo Web SDK directly:
+Automatically track all flag evaluations to Pendo using the telemetry hook:
 
 ```typescript
-// If you have the Pendo agent loaded on your page
-window.pendo?.track('event-name', { property: 'value' });
+import { OpenFeature } from '@openfeature/web-sdk';
+import { PendoProvider, PendoTelemetryHook } from '@pendo/openfeature-web-provider';
+
+const provider = new PendoProvider();
+const telemetryHook = new PendoTelemetryHook();
+
+await OpenFeature.setProviderAndWait(provider);
+OpenFeature.addHooks(telemetryHook);
+```
+
+### Telemetry Hook Options
+
+```typescript
+const telemetryHook = new PendoTelemetryHook({
+  // Optional: Custom event name (default: "flag_evaluated")
+  eventName: 'feature_flag_evaluated',
+
+  // Optional: Filter which flags to track
+  flagFilter: (flagKey) => flagKey.startsWith('feature_'),
+});
 ```
 
 ## Troubleshooting
 
 ### Flags always return default values
 
-1. Ensure `targetingKey` (visitor ID) is set in the context
-2. Verify your API key is correct
-3. Check browser console for `[PendoProvider]` warnings
-4. Confirm the visitor is in a segment with the flag enabled
+1. Ensure `requestSegmentFlags: true` is set in your Pendo initialization
+2. Check that Pendo is properly initialized before the provider
+3. Verify the visitor is in a segment with the flag enabled
+4. Check browser console for `[PendoProvider]` warnings
 
-### API calls failing
+### Provider times out
 
-1. Verify the `baseUrl` matches your Pendo region (see "Regional Data Centers" above)
-2. Check if your API key is correct
-3. Check browser console for network errors or CORS issues
-
-### Flags not updating on context change
-
-The provider automatically fetches new flags when `OpenFeature.setContext()` is called. Ensure you're awaiting the setContext call:
+Increase the `readyTimeout` option:
 
 ```typescript
-await OpenFeature.setContext({ targetingKey: newUserId });
+new PendoProvider({ readyTimeout: 15000 });
 ```
+
+### Flags not updating
+
+The provider automatically detects flag changes. If flags aren't updating:
+
+1. Verify Pendo is receiving metadata/identity updates
+2. Check that `requestSegmentFlags: true` is enabled
+3. Ensure your segments are configured correctly in Pendo
 
 ## License
 

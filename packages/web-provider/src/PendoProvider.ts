@@ -12,54 +12,39 @@ import {
   OpenFeatureEventEmitter,
   ProviderEvents,
 } from "@openfeature/web-sdk";
-import { encodeJzb } from "./jzb";
 import "./types";
 
 export interface PendoProviderOptions {
   /**
-   * Pendo API key. Required for API-based flag evaluation.
+   * Timeout in milliseconds to wait for Pendo to be ready.
+   * Default: 5000ms
    */
-  apiKey: string;
-
-  /**
-   * Pendo data host URL.
-   * Default: https://data.pendo.io
-   */
-  baseUrl?: string;
-
-  /**
-   * Cache TTL in milliseconds for segment flags.
-   * Default: 60000 (1 minute)
-   */
-  cacheTtl?: number;
-}
-
-interface CacheEntry {
-  flags: string[];
-  expiresAt: number;
+  readyTimeout?: number;
 }
 
 /**
  * OpenFeature provider for Pendo feature flags.
  *
- * This provider evaluates feature flags by calling the Pendo API directly
- * to check segment membership for a given visitor/account context.
+ * This provider integrates with the Pendo Web SDK's segment-flags plugin
+ * to evaluate feature flags based on segment membership.
+ *
+ * Prerequisites:
+ * - Pendo Web SDK must be installed and initialized on the page
+ * - `requestSegmentFlags: true` must be set in the Pendo configuration
  *
  * @example
  * ```typescript
  * import { OpenFeature } from '@openfeature/web-sdk';
  * import { PendoProvider } from '@pendo/openfeature-web-provider';
  *
- * // Set context first (required for API call)
- * await OpenFeature.setContext({
- *   targetingKey: user.id,    // visitorId (required)
- *   accountId: org.id,        // accountId (optional)
- * });
+ * // Pendo must be initialized with requestSegmentFlags enabled:
+ * // pendo.initialize({
+ * //   visitor: { id: 'user-123' },
+ * //   account: { id: 'account-456' },
+ * //   requestSegmentFlags: true
+ * // });
  *
- * // Initialize provider with API key
- * await OpenFeature.setProviderAndWait(new PendoProvider({
- *   apiKey: 'your-pendo-api-key',
- * }));
+ * await OpenFeature.setProviderAndWait(new PendoProvider());
  *
  * const client = OpenFeature.getClient();
  * const enabled = client.getBooleanValue('myFeature', false);
@@ -75,75 +60,134 @@ export class PendoProvider implements Provider {
   hooks?: Hook[];
 
   private options: Required<PendoProviderOptions>;
-  private cache: Map<string, CacheEntry> = new Map();
-  private currentFlags: string[] | null = null;
+  private flagChangeDetectionSetup = false;
+  private flagChangeHandler: (() => void) | null = null;
 
-  constructor(options: PendoProviderOptions) {
-    if (!options.apiKey) {
-      throw new Error("Pendo API key is required");
-    }
-
+  constructor(options: PendoProviderOptions = {}) {
     this.options = {
-      baseUrl: "https://data.pendo.io",
-      cacheTtl: 60000,
+      readyTimeout: 5000,
       ...options,
     };
   }
 
   /**
    * Initialize the provider.
-   * Fetches initial flags based on the current context.
+   * Waits for Pendo to be ready and sets up flag change detection.
    */
-  async initialize(context: EvaluationContext): Promise<void> {
-    try {
-      await this.fetchAndCacheFlags(context);
-      this.status = ClientProviderStatus.READY;
-    } catch (error) {
-      // Log error but don't fail initialization
-      // Flags will return defaults until successful fetch
-      console.warn("[PendoProvider] Failed to fetch initial flags:", error);
-      this.status = ClientProviderStatus.READY;
+  async initialize(): Promise<void> {
+    // Listen for pendo_ready to set up detection even if we timeout initially
+    if (typeof document !== "undefined") {
+      document.addEventListener(
+        "pendo_ready",
+        () => this.setupFlagChangeDetection(),
+        { once: true }
+      );
     }
+
+    await this.waitForPendo();
+    this.setupFlagChangeDetection();
+    this.status = ClientProviderStatus.READY;
   }
 
   /**
-   * Handle context changes by re-fetching flags.
-   * Called by the SDK when OpenFeature.setContext() is called.
+   * Wait for Pendo to be ready with timeout.
    */
-  async onContextChange(
-    _oldContext: EvaluationContext,
-    newContext: EvaluationContext
-  ): Promise<void> {
-    try {
-      await this.fetchAndCacheFlags(newContext);
-      // Emit configuration changed event so React/Angular SDKs re-render
-      this.events.emit(ProviderEvents.ConfigurationChanged);
-    } catch (error) {
-      console.error("[PendoProvider] Failed to fetch flags on context change:", error);
-      // Don't emit error event - just keep using cached/default values
+  private async waitForPendo(): Promise<void> {
+    const timeout = this.options.readyTimeout;
+    const startTime = Date.now();
+
+    return new Promise((resolve) => {
+      const check = () => {
+        // Check if pendo is available and ready
+        if (typeof window !== "undefined" && window.pendo) {
+          if (window.pendo.isReady?.() || window.pendo.segmentFlags !== undefined) {
+            resolve();
+            return;
+          }
+        }
+
+        // Check timeout
+        if (Date.now() - startTime > timeout) {
+          console.warn(
+            "[PendoProvider] Pendo not ready within timeout. Flags will use default values."
+          );
+          resolve();
+          return;
+        }
+
+        // Try again
+        setTimeout(check, 100);
+      };
+
+      // Also listen for pendo_ready event
+      if (typeof document !== "undefined") {
+        document.addEventListener(
+          "pendo_ready",
+          () => resolve(),
+          { once: true }
+        );
+      }
+
+      check();
+    });
+  }
+
+  /**
+   * Set up detection for when segment flags change.
+   * Listens for the segmentFlagsUpdated event from Pendo.
+   * Idempotent - only runs once.
+   */
+  private setupFlagChangeDetection(): void {
+    if (this.flagChangeDetectionSetup) {
+      return;
     }
+
+    if (typeof window === "undefined" || !window.pendo?.Events?.segmentFlagsUpdated) {
+      return;
+    }
+
+    this.flagChangeDetectionSetup = true;
+
+    // Create handler and store reference for cleanup
+    this.flagChangeHandler = () => {
+      this.events.emit(ProviderEvents.ConfigurationChanged);
+    };
+
+    // Subscribe to Pendo's segmentFlagsUpdated event
+    window.pendo.Events.segmentFlagsUpdated.on(this.flagChangeHandler);
   }
 
   /**
    * Shutdown the provider.
    */
   async onClose(): Promise<void> {
+    // Unsubscribe from Pendo events
+    if (
+      typeof window !== "undefined" &&
+      window.pendo?.Events?.segmentFlagsUpdated &&
+      this.flagChangeHandler
+    ) {
+      window.pendo.Events.segmentFlagsUpdated.off(this.flagChangeHandler);
+    }
+
     this.status = ClientProviderStatus.NOT_READY;
-    this.cache.clear();
-    this.currentFlags = null;
+    this.flagChangeHandler = null;
+    this.flagChangeDetectionSetup = false;
   }
 
   /**
    * Resolve a boolean flag value.
    *
-   * Checks if the flagKey exists in the fetched segment flags.
+   * Checks if the flagKey exists in pendo.segmentFlags array.
    */
   resolveBooleanEvaluation(
     flagKey: string,
     defaultValue: boolean,
     _context: EvaluationContext
   ): ResolutionDetails<boolean> {
-    if (this.currentFlags === null) {
+    const flags = this.getSegmentFlags();
+
+    if (flags === null) {
       return {
         value: defaultValue,
         reason: "DEFAULT",
@@ -151,7 +195,7 @@ export class PendoProvider implements Provider {
       };
     }
 
-    const enabled = this.currentFlags.includes(flagKey);
+    const enabled = flags.includes(flagKey);
 
     return {
       value: enabled,
@@ -242,108 +286,44 @@ export class PendoProvider implements Provider {
   }
 
   /**
-   * Track a custom event.
+   * Track a custom event in Pendo.
    *
-   * Note: Server-side tracking requires a track event secret. For web usage,
-   * consider using the Pendo Web SDK's track function directly if available.
+   * Delegates to the Pendo Web SDK's track function.
    */
   track(
     trackingEventName: string,
     _context: EvaluationContext,
-    _trackingEventDetails: TrackingEventDetails
+    trackingEventDetails: TrackingEventDetails
   ): void {
-    // Web provider doesn't support server-side tracking
-    // Users should use window.pendo.track() directly if the agent is available
-    console.warn(
-      "[PendoProvider] track() is not supported in the web provider. " +
-        "Use window.pendo.track() if the Pendo agent is loaded."
-    );
-  }
-
-  /**
-   * Fetch and cache flags for the given context.
-   */
-  private async fetchAndCacheFlags(context: EvaluationContext): Promise<void> {
-    const visitorId = context.targetingKey;
-    const accountId = context.accountId as string | undefined;
-
-    if (!visitorId) {
-      // No visitor ID - can't fetch flags
-      this.currentFlags = null;
+    if (typeof window === "undefined" || !window.pendo?.track) {
+      console.warn("[PendoProvider] Pendo Web SDK not available for tracking");
       return;
     }
 
-    // Check cache
-    const cacheKey = `${visitorId}:${accountId || ""}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      this.currentFlags = cached.flags;
-      return;
+    // Convert TrackingEventDetails to Record<string, string> for Pendo Web SDK
+    const properties: Record<string, string> = {};
+    for (const [key, value] of Object.entries(trackingEventDetails)) {
+      if (value !== undefined && value !== null) {
+        properties[key] = String(value);
+      }
     }
 
-    // Fetch from API
-    const flags = await this.fetchSegmentFlags(visitorId, accountId);
-
-    // Cache the result
-    this.cache.set(cacheKey, {
-      flags,
-      expiresAt: Date.now() + this.options.cacheTtl,
-    });
-
-    this.currentFlags = flags;
+    window.pendo.track(trackingEventName, properties);
   }
 
   /**
-   * Fetch segment flags from Pendo API using JZB-encoded payload.
+   * Get the segment flags array from Pendo.
+   * Returns null if Pendo is not available or flags haven't been loaded.
    */
-  private async fetchSegmentFlags(
-    visitorId: string,
-    accountId?: string
-  ): Promise<string[]> {
-    const jzbPayload = encodeJzb({
-      visitorId,
-      accountId,
-      url: typeof window !== "undefined" ? window.location.href : "",
-    });
-
-    const url = `${this.options.baseUrl}/data/segmentflag.json/${this.options.apiKey}?jzb=${jzbPayload}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    // Handle Pendo-specific status codes
-    if (response.status === 202) {
-      // Visitor not yet known to Pendo, return empty flags
-      return [];
+  private getSegmentFlags(): string[] | null {
+    if (typeof window === "undefined" || !window.pendo) {
+      return null;
     }
 
-    if (response.status === 429) {
-      throw new Error("Pendo API rate limit exceeded");
-    }
+    const flags = window.pendo.segmentFlags;
 
-    if (response.status === 451) {
-      // Visitor has opted out or is blocked
-      return [];
-    }
-
-    if (!response.ok) {
-      throw new Error(`Pendo API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = (await response.json()) as { segmentFlags?: string[] };
-
-    // Response format: { segmentFlags: ["flag1", "flag2"] }
-    return data.segmentFlags || [];
-  }
-
-  /**
-   * Clear the cache.
-   */
-  clearCache(): void {
-    this.cache.clear();
+    // Return null if flags haven't been loaded yet (undefined)
+    // Return the array (even if empty) if flags have been loaded
+    return flags === undefined ? null : flags;
   }
 }

@@ -17,14 +17,10 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "pako": "^2.1.0"
-  },
   "peerDependencies": {
     "@openfeature/web-sdk": "^1.0.0"
   },
   "devDependencies": {
-    "@types/pako": "^2.0.3",
     "@openfeature/web-sdk": "^1.0.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
