@@ -71,13 +71,36 @@ const provider = new PendoProvider({
   // Required: Pendo API key
   apiKey: 'YOUR_API_KEY',
 
-  // Optional: Custom Pendo data host (default: https://data.pendo.io)
-  baseUrl: 'https://custom.pendo.io',
+  // Optional: Pendo data host for your region (default: https://data.pendo.io)
+  // See "Regional Data Centers" section below
+  baseUrl: 'https://data.pendo.io',
 
   // Optional: Cache TTL in milliseconds (default: 60000 = 1 minute)
   cacheTtl: 30000,
 });
 ```
+
+### Regional Data Centers
+
+Pendo operates multiple regional data centers. You must configure the `baseUrl` to match your subscription's region:
+
+| Region | Base URL |
+|--------|----------|
+| US (default) | `https://data.pendo.io` |
+| EU | `https://data.eu.pendo.io` |
+| US1 | `https://us1.data.pendo.io` |
+| Japan | `https://data.jpn.pendo.io` |
+
+Example for EU customers:
+
+```typescript
+const provider = new PendoProvider({
+  apiKey: 'YOUR_API_KEY',
+  baseUrl: 'https://data.eu.pendo.io',
+});
+```
+
+If you're unsure which region your subscription uses, check your Pendo agent installation snippet or contact Pendo support.
 
 ## How It Works
 
@@ -136,9 +159,9 @@ window.pendo?.track('event-name', { property: 'value' });
 
 ### API calls failing
 
-1. Check if your API key has the correct permissions
-2. Verify the `baseUrl` is correct for your Pendo environment
-3. Check for CORS issues if using a custom domain
+1. Verify the `baseUrl` matches your Pendo region (see "Regional Data Centers" above)
+2. Check if your API key is correct
+3. Check browser console for network errors or CORS issues
 
 ### Flags not updating on context change
 
