@@ -4,6 +4,7 @@ import type {
   EvaluationDetails,
   FlagValue,
 } from "@openfeature/web-sdk";
+import "./types";
 
 export interface PendoTelemetryHookOptions {
   /**
