@@ -51,6 +51,17 @@ commands:
             github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
             EOF
 
+  publish-artifactory:
+    steps:
+      - run:
+          name: Attempting to publish server-provider package to Artifactory
+          command: |
+              npm publish --workspace=@pendo/openfeature-server-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+      - run:
+          name: Attempting to publish web-provider package to Artifactory
+          command: |
+              npm publish --workspace=@pendo/openfeature-web-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+
   publish-npm:
     steps:
       - run: *npmjs-npmrc
@@ -114,6 +125,7 @@ jobs:
     steps:
       - attach_workspace:
           at: /home/circleci
+      - publish-artifactory
       - publish-npm
 
 workflows:
