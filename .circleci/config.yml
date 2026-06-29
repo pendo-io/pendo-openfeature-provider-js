@@ -16,7 +16,7 @@ orbs:
 executors:
   client-executor:
     docker:
-      - image: us-docker.pkg.dev/pendo-dev/pendo-artifact/circle-tools:node22
+      - image: us-docker.pkg.dev/pendo-artifact/pendo-artifact/circle-tools:node22
         auth:
           username: _json_key
           password: $GCR_JSON_KEY_FILE
