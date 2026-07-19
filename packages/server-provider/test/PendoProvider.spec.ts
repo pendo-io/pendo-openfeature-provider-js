@@ -127,6 +127,108 @@ describe('PendoProvider', () => {
     });
   });
 
+  describe('live segmentflag response shape', () => {
+    beforeEach(async () => {
+      await provider.initialize();
+    });
+
+    it('resolves true for a flag enabled in the live { flags: {...}, hash } shape', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ flags: { myFlag: true, other: false }, hash: 'h' }),
+      });
+
+      const result = await provider.resolveBooleanEvaluation(
+        'myFlag',
+        false,
+        { targetingKey: 'user-123' }
+      );
+
+      expect(result.value).toBe(true);
+      expect(result.reason).toBe('TARGETING_MATCH');
+      expect(result.variant).toBe('on');
+    });
+
+    it('resolves off for a flag with a false entry in the live shape', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ flags: { myFlag: true, other: false }, hash: 'h' }),
+      });
+
+      const result = await provider.resolveBooleanEvaluation(
+        'other',
+        false,
+        { targetingKey: 'user-123' }
+      );
+
+      expect(result.value).toBe(false);
+      expect(result.reason).toBe('DEFAULT');
+      expect(result.variant).toBe('off');
+    });
+
+    it('resolves off for an empty flags map without falling back to segmentFlags', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ flags: {}, segmentFlags: ['myFlag'], hash: 'h' }),
+      });
+
+      const result = await provider.resolveBooleanEvaluation(
+        'myFlag',
+        false,
+        { targetingKey: 'user-123' }
+      );
+
+      expect(result.value).toBe(false);
+      expect(result.reason).toBe('DEFAULT');
+      expect(result.variant).toBe('off');
+    });
+
+    it('prefers the flags map over segmentFlags when both are present', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ flags: { a: true }, segmentFlags: ['b'] }),
+      });
+
+      const resultA = await provider.resolveBooleanEvaluation(
+        'a',
+        false,
+        { targetingKey: 'user-123' }
+      );
+      const resultB = await provider.resolveBooleanEvaluation(
+        'b',
+        false,
+        { targetingKey: 'user-123' }
+      );
+
+      expect(resultA.value).toBe(true);
+      expect(resultA.reason).toBe('TARGETING_MATCH');
+      expect(resultB.value).toBe(false);
+      expect(resultB.reason).toBe('DEFAULT');
+    });
+
+    it('still resolves true for the legacy { segmentFlags: [...] } shape', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ segmentFlags: ['myFlag'] }),
+      });
+
+      const result = await provider.resolveBooleanEvaluation(
+        'myFlag',
+        false,
+        { targetingKey: 'user-123' }
+      );
+
+      expect(result.value).toBe(true);
+      expect(result.reason).toBe('TARGETING_MATCH');
+      expect(result.variant).toBe('on');
+    });
+  });
+
   describe('API response handling', () => {
     beforeEach(async () => {
       await provider.initialize();

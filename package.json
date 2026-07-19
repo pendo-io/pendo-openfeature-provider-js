@@ -8,7 +8,7 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:coverage": "jest --coverage",
-    "test:live": "ts-node --require dotenv/config scripts/live-test.ts",
+    "test:live": "npm run build --workspace @pendo/openfeature-server-provider && node -r dotenv/config scripts/live-test.cjs",
     "test:web": "npm run test:web:build && npm run test:web:serve",
     "test:web:build": "esbuild scripts/web-test/test.ts --bundle --outfile=scripts/web-test/test-bundle.js --format=esm --target=es2020",
     "test:web:serve": "serve scripts/web-test -p 3000",

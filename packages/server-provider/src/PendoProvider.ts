@@ -46,6 +46,14 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+interface SegmentFlagResponse {
+  /** Live shape: map of flag name to enabled state. */
+  flags?: Record<string, boolean>;
+  /** Legacy shape: array of enabled flag names. */
+  segmentFlags?: string[];
+  hash?: string;
+}
+
 /**
  * OpenFeature provider for Pendo feature flags (server-side).
  *
@@ -389,9 +397,14 @@ export class PendoProvider implements Provider {
       throw new Error(`Pendo API error: ${response.status} ${response.statusText}`);
     }
 
-    const data = (await response.json()) as { segmentFlags?: string[] };
+    const data = (await response.json()) as SegmentFlagResponse;
 
-    // Response format: { segmentFlags: ["flag1", "flag2"] }
+    if (data.flags) {
+      return Object.entries(data.flags)
+        .filter(([, enabled]) => enabled === true)
+        .map(([flagName]) => flagName);
+    }
+
     return data.segmentFlags || [];
   }
 

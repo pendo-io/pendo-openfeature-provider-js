@@ -1,5 +1,6 @@
 import pako from 'pako';
 import { encodeJzb } from '../src/jzb';
+import { encodeJzb as encodeJzbFromRoot } from '../src';
 
 describe('encodeJzb', () => {
   it('encodes a simple payload correctly', () => {
@@ -69,6 +70,13 @@ describe('encodeJzb', () => {
 
     expect(encoded).not.toMatch(/[+/=]/);
     expect(decodeJzb(encoded)).toEqual(payload);
+  });
+
+  it('is exported from the package root', () => {
+    const payload = { visitorId: 'user-123', accountId: 'account-456' };
+
+    expect(encodeJzbFromRoot).toBe(encodeJzb);
+    expect(decodeJzb(encodeJzbFromRoot(payload))).toEqual(payload);
   });
 
   it('handles unicode characters', () => {
