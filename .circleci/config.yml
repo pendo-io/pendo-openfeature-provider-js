@@ -56,11 +56,21 @@ commands:
       - run:
           name: Attempting to publish server-provider package to Artifactory
           command: |
-              npm publish --workspace=@pendo/openfeature-server-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+              VERSION=$(node -p "require('./packages/server-provider/package.json').version")
+              if npm view "@pendo/openfeature-server-provider@$VERSION" version --registry=https://pendo.jfrog.io/artifactory/api/npm/web/ >/dev/null 2>&1; then
+                echo "@pendo/openfeature-server-provider@$VERSION already published; skipping"
+              else
+                npm publish --workspace=@pendo/openfeature-server-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+              fi
       - run:
           name: Attempting to publish web-provider package to Artifactory
           command: |
-              npm publish --workspace=@pendo/openfeature-web-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+              VERSION=$(node -p "require('./packages/web-provider/package.json').version")
+              if npm view "@pendo/openfeature-web-provider@$VERSION" version --registry=https://pendo.jfrog.io/artifactory/api/npm/web/ >/dev/null 2>&1; then
+                echo "@pendo/openfeature-web-provider@$VERSION already published; skipping"
+              else
+                npm publish --workspace=@pendo/openfeature-web-provider --registry=https://pendo.jfrog.io/artifactory/api/npm/web/
+              fi
 
   publish-npm:
     steps:
@@ -68,11 +78,21 @@ commands:
       - run:
           name: Publishing server-provider
           command: |
-              npm publish --workspace=@pendo/openfeature-server-provider
+              VERSION=$(node -p "require('./packages/server-provider/package.json').version")
+              if npm view "@pendo/openfeature-server-provider@$VERSION" version >/dev/null 2>&1; then
+                echo "@pendo/openfeature-server-provider@$VERSION already published; skipping"
+              else
+                npm publish --workspace=@pendo/openfeature-server-provider
+              fi
       - run:
           name: Publish web-provider
           command: |
-              npm publish --workspace=@pendo/openfeature-web-provider
+              VERSION=$(node -p "require('./packages/web-provider/package.json').version")
+              if npm view "@pendo/openfeature-web-provider@$VERSION" version >/dev/null 2>&1; then
+                echo "@pendo/openfeature-web-provider@$VERSION already published; skipping"
+              else
+                npm publish --workspace=@pendo/openfeature-web-provider
+              fi
 
   run-unit-tests:
     steps:
