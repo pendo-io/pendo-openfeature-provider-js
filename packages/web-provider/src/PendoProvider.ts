@@ -13,6 +13,8 @@ import {
   ProviderEvents,
 } from "@openfeature/web-sdk";
 import "./types";
+import { PendoRuntimeError, reportRuntimeError } from "./errors";
+import type { PendoErrorHandler } from "./errors";
 
 export interface PendoProviderOptions {
   /**
@@ -20,6 +22,14 @@ export interface PendoProviderOptions {
    * Default: 5000ms
    */
   readyTimeout?: number;
+
+  /**
+   * Handler for runtime failures (Pendo not ready within `readyTimeout`).
+   * When set, these are not written to the console; when unset, the timeout
+   * is console.warn'd. Configuration mistakes are always console.warn'd.
+   * If the handler throws or rejects, its error and the original are console.error'd.
+   */
+  onError?: PendoErrorHandler;
 }
 
 /**
@@ -59,7 +69,9 @@ export class PendoProvider implements Provider {
   status: ClientProviderStatus = ClientProviderStatus.NOT_READY;
   hooks?: Hook[];
 
-  private options: Required<PendoProviderOptions>;
+  private options: Required<Omit<PendoProviderOptions, "onError">> & {
+    onError?: PendoErrorHandler;
+  };
   private flagChangeDetectionSetup = false;
   private flagChangeHandler: (() => void) | null = null;
 
@@ -108,8 +120,13 @@ export class PendoProvider implements Provider {
 
         // Check timeout
         if (Date.now() - startTime > timeout) {
-          console.warn(
-            "[PendoProvider] Pendo not ready within timeout. Flags will use default values."
+          this.report(
+            new PendoRuntimeError({
+              message:
+                "Pendo not ready within timeout. Flags will use default values.",
+              source: "sdk-ready",
+              transient: true,
+            })
           );
           resolve();
           return;
@@ -130,6 +147,12 @@ export class PendoProvider implements Provider {
 
       check();
     });
+  }
+
+  private report(error: PendoRuntimeError): void {
+    // The sdk-ready timeout is a warning, not an error.
+    const log = error.source === "sdk-ready" ? console.warn : console.error;
+    reportRuntimeError(error, this.options.onError, "[PendoProvider]", log);
   }
 
   /**

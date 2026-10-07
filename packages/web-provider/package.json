@@ -1,6 +1,6 @@
 {
   "name": "@pendo/openfeature-web-provider",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "OpenFeature provider for Pendo feature flags (web/browser)",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

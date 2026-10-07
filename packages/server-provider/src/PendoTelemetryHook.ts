@@ -4,6 +4,8 @@ import type {
   EvaluationDetails,
   FlagValue,
 } from "@openfeature/server-sdk";
+import { PendoRuntimeError, isTransientStatus, reportRuntimeError } from "./errors";
+import type { PendoErrorHandler } from "./errors";
 
 export interface PendoTelemetryHookOptions {
   /**
@@ -29,6 +31,14 @@ export interface PendoTelemetryHookOptions {
    * Default: https://data.pendo.io
    */
   baseUrl?: string;
+
+  /**
+   * Handler for runtime failures (network errors, HTTP errors, unparseable
+   * responses). When set, these are not written to the console; when unset,
+   * they are console.error'd. Configuration mistakes are always console.warn'd.
+   * If the handler throws or rejects, its error and the original are console.error'd.
+   */
+  onError?: PendoErrorHandler;
 }
 
 /**
@@ -56,8 +66,11 @@ export interface PendoTelemetryHookOptions {
  * ```
  */
 export class PendoTelemetryHook implements Hook {
-  private options: Required<Omit<PendoTelemetryHookOptions, "flagFilter">> & {
+  private options: Required<
+    Omit<PendoTelemetryHookOptions, "flagFilter" | "onError">
+  > & {
     flagFilter?: (flagKey: string) => boolean;
+    onError?: PendoErrorHandler;
   };
 
   constructor(options: PendoTelemetryHookOptions) {
@@ -116,9 +129,33 @@ export class PendoTelemetryHook implements Hook {
         "x-pendo-track-event-secret": this.options.trackEventSecret,
       },
       body: JSON.stringify(payload),
-    }).catch((error) => {
-      console.error("[PendoTelemetryHook] Failed to track flag evaluation:", error);
-    });
+    })
+      .then((response) => {
+        if (!response.ok) {
+          this.report(
+            new PendoRuntimeError({
+              message: `Pendo telemetry request failed: ${response.status} ${response.statusText}`,
+              source: "telemetry",
+              status: response.status,
+              transient: isTransientStatus(response.status),
+            })
+          );
+        }
+      })
+      .catch((error) => {
+        this.report(
+          new PendoRuntimeError({
+            message: "Pendo telemetry request failed",
+            source: "telemetry",
+            transient: true,
+            cause: error,
+          })
+        );
+      });
+  }
+
+  private report(error: PendoRuntimeError): void {
+    reportRuntimeError(error, this.options.onError, "[PendoTelemetryHook]");
   }
 
   /**
