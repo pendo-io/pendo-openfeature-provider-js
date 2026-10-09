@@ -116,6 +116,24 @@ npm run build
 npm test
 ```
 
+## Releasing
+
+Publishing is triggered by pushing a version tag. CircleCI runs the tests and then publishes both packages to Artifactory and npm.
+
+1. Bump `version` in both `packages/web-provider/package.json` and `packages/server-provider/package.json` (and update `package-lock.json`) through a PR to `main`. Use a minor bump for new features and a patch bump for fixes.
+2. On GitHub, go to **Releases** → **Draft a new release**.
+3. In **Choose a tag**, type a new tag matching the version you bumped to, prefixed with `v` (for example `v0.3.1`), and select **Create new tag: ... on publish**. Set the target to `main`. The tag must match `vX.Y.Z` or CircleCI will not run the publish workflow.
+4. Add a title and release notes (**Generate release notes** works well), then click **Publish release**.
+5. Watch the `publish` workflow in CircleCI to confirm it succeeds.
+
+Alternatively, steps 2-4 can be done with the [GitHub CLI](https://cli.github.com/), which creates the tag from `main` and publishes the release with generated notes:
+
+```bash
+gh release create v0.3.1 --target main --title v0.3.1 --generate-notes
+```
+
+The published version comes from each package's `package.json`, not from the tag. If a version is already published the publish step is skipped, so a tag without a matching version bump publishes nothing.
+
 ## License
 
 MIT
