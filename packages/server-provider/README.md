@@ -136,6 +136,9 @@ const provider = new PendoProvider({
 
   // Optional: Track event secret (required for track() method)
   trackEventSecret: 'YOUR_TRACK_SECRET',
+
+  // Optional: receive runtime failures instead of console.error (see Error Handling)
+  onError: (error) => logger.warn('pendo failure', { source: error.source }),
 });
 ```
 
@@ -205,7 +208,63 @@ provider.clearCache();
 | Flag key in segmentFlags | `TARGETING_MATCH` | `on` |
 | Flag key not in segmentFlags | `DEFAULT` | `off` |
 | No targetingKey provided | `DEFAULT` | `default` |
-| API error | `ERROR` | - |
+| API error (HTTP error, network failure, unparseable response) | `ERROR` | - |
+
+## Error Handling
+
+The provider separates two kinds of problems:
+
+- **Configuration mistakes** (for example a missing `trackEventSecret` or
+  `targetingKey`) are durable and the caller's to fix. They are always written
+  with `console.warn`, whether or not `onError` is set.
+- **Runtime failures** (network errors, HTTP errors, timeouts, unparseable
+  responses) are environmental. If you pass an `onError` handler, it receives a
+  `PendoRuntimeError` and nothing is written to the console, so you own logging
+  and severity. If you do not pass one, they are written with `console.error`.
+
+`PendoRuntimeError` fields:
+
+| Field | Meaning |
+|-------|---------|
+| `source` | `"segmentflag"`, `"track"`, `"telemetry"` or `"sdk-ready"` |
+| `status` | HTTP status; `undefined` for a network failure or timeout |
+| `transient` | `true` for 5xx, 429, network failure and timeout; `false` for other 4xx and unparseable responses |
+| `cause` | The underlying error, if any |
+
+```typescript
+import { PendoProvider, PendoTelemetryHook, PendoRuntimeError } from '@pendo/openfeature-server-provider';
+
+const onError = (e: PendoRuntimeError) =>
+  e.transient && !isProduction
+    ? logger.warn('pendo flags degraded', { source: e.source, status: e.status })
+    : logger.error('pendo flags failed', e);
+
+const provider = new PendoProvider({ apiKey, defaultUrl, onError });
+const hook = new PendoTelemetryHook({ trackEventSecret, onError });
+```
+
+If `onError` throws or returns a rejected promise, the handler's error and the
+original error are both written with `console.error`, and flag evaluation is not
+affected. A failed evaluation still returns the default value with reason `ERROR`.
+
+Reporting channels:
+
+- **Evaluation failures** (`source: "segmentflag"`) reach both `onError` and
+  OpenFeature `error` hooks. The `error` hook receives only the error code and
+  message, with no status.
+- **Track and telemetry failures** (`source: "track"`, `"telemetry"`) reach only
+  `onError`, or `console.error` when no handler is set.
+
+Passing `onError` is what turns off console output, so always pass one in a
+server context. To report evaluation failures from an OpenFeature `error` hook
+instead, skip them in `onError`:
+
+```typescript
+const onError = (e: PendoRuntimeError) => {
+  if (e.source === 'segmentflag') return; // reported by the error hook
+  logger.warn('pendo request failed', { source: e.source, status: e.status });
+};
+```
 
 ## Troubleshooting
 
@@ -214,7 +273,7 @@ provider.clearCache();
 1. Verify the API key is correct
 2. Check that `targetingKey` is provided in the context
 3. Confirm the visitor/account is in a segment with the flag enabled
-4. Check server logs for `[PendoProvider]` warnings
+4. If you pass `onError`, check your handler's output for runtime failures; if you do not, check server logs for `[PendoProvider]` `console.error` lines
 
 ### Rate limit errors
 

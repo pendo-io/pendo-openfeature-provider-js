@@ -1,5 +1,6 @@
 import { PendoProvider } from '../src/PendoProvider';
-import { ServerProviderStatus, ErrorCode } from '@openfeature/server-sdk';
+import { PendoRuntimeError } from '../src/errors';
+import { ServerProviderStatus, ErrorCode, OpenFeature } from '@openfeature/server-sdk';
 
 describe('PendoProvider', () => {
   let provider: PendoProvider;
@@ -654,6 +655,25 @@ describe('PendoProvider', () => {
     });
   });
 
+  describe('config warnings with onError', () => {
+    it('still console.warns config mistakes and does not call the handler', () => {
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const onError = jest.fn();
+      const p = new PendoProvider({
+        apiKey: 'test-api-key',
+        defaultUrl: 'https://example.com',
+        onError,
+      });
+
+      p.track('button_clicked', { targetingKey: 'user-123' }, {});
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('trackEventSecret is required')
+      );
+      expect(onError).not.toHaveBeenCalled();
+    });
+  });
+
   describe('API request format', () => {
     beforeEach(async () => {
       await provider.initialize();
@@ -685,6 +705,282 @@ describe('PendoProvider', () => {
       const url = mockFetch.mock.calls[0][0];
       const jzbParam = new URL(url).searchParams.get('jzb');
       expect(jzbParam).toMatch(/^[A-Za-z0-9_-]+$/);
+    });
+  });
+
+  describe('runtime error reporting', () => {
+    let consoleErrorSpy: jest.SpyInstance;
+    let consoleWarnSpy: jest.SpyInstance;
+    const ctx = { targetingKey: 'user-123' };
+
+    beforeEach(() => {
+      consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    });
+
+    const makeProvider = (onError?: jest.Mock, extra: Record<string, unknown> = {}) =>
+      new PendoProvider({
+        apiKey: 'test-api-key',
+        defaultUrl: 'https://example.com',
+        onError,
+        ...extra,
+      });
+
+    it('writes exactly one console.error for a 502 when no onError is set', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+      const result = await provider.resolveBooleanEvaluation('feature-a', false, ctx);
+
+      expect(result.reason).toBe('ERROR');
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Pendo API error: 502 Bad Gateway'),
+        ''
+      );
+    });
+
+    it.each([
+      [502, 'Bad Gateway', true, 'Pendo API error: 502 Bad Gateway'],
+      [503, 'Service Unavailable', true, 'Pendo API error: 503 Service Unavailable'],
+      [429, 'Too Many Requests', true, 'Pendo API rate limit exceeded'],
+      [401, 'Unauthorized', false, 'Pendo API error: 401 Unauthorized'],
+    ])('reports HTTP %i to onError once without console output', async (status, statusText, transient, message) => {
+      const onError = jest.fn();
+      mockFetch.mockResolvedValue({ ok: false, status, statusText });
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', true, ctx);
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0][0];
+      expect(err).toBeInstanceOf(PendoRuntimeError);
+      expect(err.name).toBe('PendoRuntimeError');
+      expect(err.source).toBe('segmentflag');
+      expect(err.status).toBe(status);
+      expect(err.transient).toBe(transient);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
+      expect(result.value).toBe(true);
+      expect(result.reason).toBe('ERROR');
+      expect(result.errorCode).toBe(ErrorCode.GENERAL);
+      expect(result.errorMessage).toBe(message);
+    });
+
+    it('reports a network rejection as transient with the cause', async () => {
+      const onError = jest.fn();
+      const cause = new Error('Network error');
+      mockFetch.mockRejectedValue(cause);
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', true, ctx);
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0][0];
+      expect(err.source).toBe('segmentflag');
+      expect(err.status).toBeUndefined();
+      expect(err.transient).toBe(true);
+      expect(err.cause).toBe(cause);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(result.reason).toBe('ERROR');
+      expect(result.errorCode).toBe(ErrorCode.GENERAL);
+    });
+
+    it('reports bad JSON as non-transient with the parse error as cause', async () => {
+      const onError = jest.fn();
+      const parseError = new SyntaxError('Unexpected token');
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw parseError;
+        },
+      });
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', false, ctx);
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0][0];
+      expect(err.source).toBe('segmentflag');
+      expect(err.status).toBe(200);
+      expect(err.transient).toBe(false);
+      expect(err.cause).toBe(parseError);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(result.reason).toBe('ERROR');
+      expect(result.errorMessage).toBe('Unexpected token');
+    });
+
+    it('reports a body read failure as transient with the response status', async () => {
+      const onError = jest.fn();
+      const readError = new TypeError('terminated');
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw readError;
+        },
+      });
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', false, ctx);
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0][0];
+      expect(err.source).toBe('segmentflag');
+      expect(err.status).toBe(200);
+      expect(err.transient).toBe(true);
+      expect(err.cause).toBe(readError);
+      expect(result.reason).toBe('ERROR');
+      expect(result.errorMessage).toBe('terminated');
+    });
+
+    it('console.errors both errors when an async handler rejects', async () => {
+      const handlerError = new Error('async handler bug');
+      const onError = jest.fn().mockRejectedValue(handlerError);
+      mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', true, ctx);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('onError handler threw or rejected'),
+        handlerError
+      );
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('Original error: Pendo API error: 502'),
+        ''
+      );
+      expect(result.reason).toBe('ERROR');
+    });
+
+    it('console.errors both errors when the handler throws, and still returns ERROR', async () => {
+      const handlerError = new Error('handler bug');
+      const onError = jest.fn(() => {
+        throw handlerError;
+      });
+      mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+      const result = await makeProvider(onError).resolveBooleanEvaluation('feature-a', true, ctx);
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('onError handler threw'),
+        handlerError
+      );
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('Original error: Pendo API error: 502'),
+        ''
+      );
+      expect(result.value).toBe(true);
+      expect(result.reason).toBe('ERROR');
+    });
+
+    it('wraps an unexpected non-runtime error as a non-transient segmentflag error', async () => {
+      const onError = jest.fn();
+      const p = makeProvider(onError);
+      const bug = new TypeError('boom');
+      jest.spyOn(p as any, 'getSegmentFlags').mockRejectedValue(bug);
+
+      const result = await p.resolveBooleanEvaluation('feature-a', false, ctx);
+
+      const err = onError.mock.calls[0][0];
+      expect(err).toBeInstanceOf(PendoRuntimeError);
+      expect(err.source).toBe('segmentflag');
+      expect(err.transient).toBe(false);
+      expect(err.cause).toBe(bug);
+      expect(result.errorMessage).toBe('boom');
+    });
+
+    describe('track()', () => {
+      const trackProvider = (onError?: jest.Mock) =>
+        makeProvider(onError, { trackEventSecret: 'test-secret' });
+
+      it('reports a non-ok track response to onError', async () => {
+        const onError = jest.fn();
+        mockFetch.mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' });
+
+        trackProvider(onError).track('evt', ctx, {});
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        const err = onError.mock.calls[0][0];
+        expect(err.source).toBe('track');
+        expect(err.status).toBe(401);
+        expect(err.transient).toBe(false);
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      });
+
+      it('reports a track rejection to onError as transient', async () => {
+        const onError = jest.fn();
+        const cause = new Error('Network error');
+        mockFetch.mockRejectedValue(cause);
+
+        trackProvider(onError).track('evt', ctx, {});
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        const err = onError.mock.calls[0][0];
+        expect(err.source).toBe('track');
+        expect(err.status).toBeUndefined();
+        expect(err.transient).toBe(true);
+        expect(err.cause).toBe(cause);
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      });
+
+      it('console.errors a non-ok track response when no handler is set', async () => {
+        mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+
+        trackProvider().track('evt', ctx, {});
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Pendo track request failed: 503'),
+          ''
+        );
+      });
+
+      it('console.errors a track rejection when no handler is set', async () => {
+        const cause = new Error('Network error');
+        mockFetch.mockRejectedValue(cause);
+
+        trackProvider().track('evt', ctx, {});
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Pendo track request failed'),
+          cause
+        );
+      });
+    });
+
+    describe('through an OpenFeature client', () => {
+      afterEach(async () => {
+        await OpenFeature.clearProviders();
+      });
+
+      it('returns the default value and fires the handler once', async () => {
+        const onError = jest.fn();
+        mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+        await OpenFeature.setProviderAndWait('e2e-error-handler', makeProvider(onError));
+        const client = OpenFeature.getClient('e2e-error-handler');
+
+        const details = await client.getBooleanDetails('feature-a', true, ctx);
+
+        expect(details.value).toBe(true);
+        expect(details.reason).toBe('ERROR');
+        expect(details.errorCode).toBe(ErrorCode.GENERAL);
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError.mock.calls[0][0]).toMatchObject({
+          source: 'segmentflag',
+          status: 502,
+          transient: true,
+        });
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      });
     });
   });
 });

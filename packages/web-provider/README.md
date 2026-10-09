@@ -69,6 +69,9 @@ client.track('checkout_started', { cartValue: '99.99' });
 const provider = new PendoProvider({
   // Timeout waiting for the Pendo Web SDK to be ready (default: 5000ms)
   readyTimeout: 10000,
+
+  // Optional: receive runtime failures instead of the console (see Error Handling)
+  onError: (error) => logger.warn('pendo failure', { source: error.source }),
 });
 ```
 
@@ -124,6 +127,42 @@ const telemetryHook = new PendoTelemetryHook({
 });
 ```
 
+## Error Handling
+
+The provider separates two kinds of problems:
+
+- **Configuration mistakes** (for example the Pendo Web SDK being unavailable
+  when calling `track()`) are always written with `console.warn`, whether or
+  not `onError` is set.
+- **Runtime failures** (Pendo not ready within `readyTimeout`) are
+  environmental. If you pass an `onError` handler, it receives a
+  `PendoRuntimeError` and nothing is written to the console. If you do not,
+  the timeout is written with `console.warn`.
+
+`PendoRuntimeError` fields:
+
+| Field | Meaning |
+|-------|---------|
+| `source` | `"sdk-ready"` |
+| `status` | Always `undefined` |
+| `transient` | Always `true` |
+| `cause` | Always `undefined` |
+
+```typescript
+import { PendoProvider, PendoRuntimeError } from '@pendo/openfeature-web-provider';
+
+const provider = new PendoProvider({
+  onError: (e: PendoRuntimeError) => logger.warn('pendo not ready', { source: e.source }),
+});
+```
+
+If `onError` throws or returns a rejected promise, the handler's error and the
+original error are both written with `console.error`, and the provider is not affected.
+
+The ready timeout is reported only through `onError`, or `console.warn` when no
+handler is set. It does not reach OpenFeature `error` hooks: initialization
+succeeds and flags resolve to their defaults.
+
 ## Troubleshooting
 
 ### Flags always return default values
@@ -131,7 +170,7 @@ const telemetryHook = new PendoTelemetryHook({
 1. Ensure `requestSegmentFlags: true` is set in your Pendo initialization
 2. Check that Pendo is properly initialized before the provider
 3. Verify the visitor is in a segment with the flag enabled
-4. Check browser console for `[PendoProvider]` warnings
+4. Check browser console for `[PendoProvider]` warnings, or your `onError` handler output if set
 
 ### Provider times out
 
@@ -140,6 +179,8 @@ Increase the `readyTimeout` option:
 ```typescript
 new PendoProvider({ readyTimeout: 15000 });
 ```
+
+To observe the timeout programmatically, pass `onError` (see Error Handling).
 
 ### Flags not updating
 

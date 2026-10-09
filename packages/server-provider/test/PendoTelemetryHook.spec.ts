@@ -1,5 +1,6 @@
 import type { HookContext, EvaluationDetails, FlagValue } from '@openfeature/server-sdk';
 import { PendoTelemetryHook } from '../src/PendoTelemetryHook';
+import { PendoRuntimeError } from '../src/errors';
 
 describe('PendoTelemetryHook', () => {
   let hook: PendoTelemetryHook;
@@ -221,10 +222,119 @@ describe('PendoTelemetryHook', () => {
       // Allow fire-and-forget to execute
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        '[PendoTelemetryHook] Failed to track flag evaluation:',
+        '[PendoTelemetryHook] Pendo telemetry request failed',
         expect.any(Error)
       );
+    });
+
+    describe('onError', () => {
+      const run = async (h: PendoTelemetryHook) => {
+        h.after(createHookContext(), createEvaluationDetails());
+        await new Promise(resolve => setTimeout(resolve, 10));
+      };
+      const makeHook = (onError: jest.Mock) =>
+        new PendoTelemetryHook({ trackEventSecret: 'test-secret', onError });
+
+      it('routes a rejection to the handler without console output', async () => {
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        const cause = new Error('Network error');
+        mockFetch.mockRejectedValue(cause);
+        const onError = jest.fn();
+
+        await run(makeHook(onError));
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        const err = onError.mock.calls[0][0];
+        expect(err).toBeInstanceOf(PendoRuntimeError);
+        expect(err.source).toBe('telemetry');
+        expect(err.status).toBeUndefined();
+        expect(err.transient).toBe(true);
+        expect(err.cause).toBe(cause);
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      });
+
+      it('routes a non-ok response to the handler with status and transient', async () => {
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        mockFetch.mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' });
+        const onError = jest.fn();
+
+        await run(makeHook(onError));
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        const err = onError.mock.calls[0][0];
+        expect(err.source).toBe('telemetry');
+        expect(err.status).toBe(401);
+        expect(err.transient).toBe(false);
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      });
+
+      it('marks a 503 response transient', async () => {
+        mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
+        const onError = jest.fn();
+
+        await run(makeHook(onError));
+
+        expect(onError.mock.calls[0][0].transient).toBe(true);
+      });
+
+      it('console.errors a non-ok response when no handler is set', async () => {
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Internal Server Error' });
+
+        await run(hook);
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[PendoTelemetryHook] Pendo telemetry request failed: 500'),
+          ''
+        );
+      });
+
+      it('console.errors both errors when the handler throws, without throwing', async () => {
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        const handlerError = new Error('handler bug');
+        mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+        const onError = jest.fn(() => {
+          throw handlerError;
+        });
+
+        await run(makeHook(onError));
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+        expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining('[PendoTelemetryHook] onError handler threw'),
+          handlerError
+        );
+        expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+          2,
+          expect.stringContaining('[PendoTelemetryHook] Original error:'),
+          ''
+        );
+      });
+
+      it('console.errors both errors when an async handler rejects', async () => {
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        const handlerError = new Error('async handler bug');
+        mockFetch.mockResolvedValue({ ok: false, status: 502, statusText: 'Bad Gateway' });
+        const onError = jest.fn().mockRejectedValue(handlerError);
+
+        await run(makeHook(onError));
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+        expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining('[PendoTelemetryHook] onError handler threw or rejected'),
+          handlerError
+        );
+        expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+          2,
+          expect.stringContaining('[PendoTelemetryHook] Original error:'),
+          ''
+        );
+      });
     });
   });
 

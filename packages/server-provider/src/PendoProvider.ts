@@ -9,6 +9,8 @@ import type {
 } from "@openfeature/server-sdk";
 import { ServerProviderStatus, ErrorCode } from "@openfeature/server-sdk";
 import { encodeJzb } from "./jzb";
+import { PendoRuntimeError, isTransientStatus, reportRuntimeError } from "./errors";
+import type { PendoErrorHandler } from "./errors";
 
 export interface PendoProviderOptions {
   /**
@@ -39,6 +41,14 @@ export interface PendoProviderOptions {
    * Required to use the track() method.
    */
   trackEventSecret?: string;
+
+  /**
+   * Handler for runtime failures (network errors, HTTP errors, unparseable
+   * responses). When set, these are not written to the console; when unset,
+   * they are console.error'd. Configuration mistakes are always console.warn'd.
+   * If the handler throws or rejects, its error and the original are console.error'd.
+   */
+  onError?: PendoErrorHandler;
 }
 
 interface CacheEntry {
@@ -92,8 +102,11 @@ export class PendoProvider implements Provider {
   status: ServerProviderStatus = ServerProviderStatus.NOT_READY;
   hooks?: Hook[];
 
-  private options: Required<Omit<PendoProviderOptions, "trackEventSecret">> & {
+  private options: Required<
+    Omit<PendoProviderOptions, "trackEventSecret" | "onError">
+  > & {
     trackEventSecret?: string;
+    onError?: PendoErrorHandler;
   };
   private cache: Map<string, CacheEntry> = new Map();
 
@@ -173,9 +186,29 @@ export class PendoProvider implements Provider {
         "x-pendo-track-event-secret": this.options.trackEventSecret,
       },
       body: JSON.stringify(payload),
-    }).catch((error) => {
-      console.error("[PendoProvider] Failed to track event:", error);
-    });
+    })
+      .then((response) => {
+        if (!response.ok) {
+          this.report(
+            new PendoRuntimeError({
+              message: `Pendo track request failed: ${response.status} ${response.statusText}`,
+              source: "track",
+              status: response.status,
+              transient: isTransientStatus(response.status),
+            })
+          );
+        }
+      })
+      .catch((error) => {
+        this.report(
+          new PendoRuntimeError({
+            message: "Pendo track request failed",
+            source: "track",
+            transient: true,
+            cause: error,
+          })
+        );
+      });
   }
 
   /**
@@ -205,12 +238,22 @@ export class PendoProvider implements Provider {
         variant: enabled ? "on" : "off",
       };
     } catch (error) {
-      console.error("[PendoProvider] Error evaluating flag:", error);
+      const err =
+        error instanceof PendoRuntimeError
+          ? error
+          : new PendoRuntimeError({
+              message: error instanceof Error ? error.message : "Unknown error",
+              source: "segmentflag",
+              transient: false,
+              cause: error,
+            });
+      this.report(err);
       return {
         value: defaultValue,
         reason: "ERROR",
         errorCode: ErrorCode.GENERAL,
-        errorMessage: error instanceof Error ? error.message : "Unknown error",
+        // Failures with an underlying error surface that error's message.
+        errorMessage: err.cause instanceof Error ? err.cause.message : err.message,
       };
     }
   }
@@ -338,20 +381,15 @@ export class PendoProvider implements Provider {
     }
 
     // Fetch from Pendo API
-    try {
-      const flags = await this.fetchSegmentFlags(visitorId, accountId);
+    const flags = await this.fetchSegmentFlags(visitorId, accountId);
 
-      // Cache the result
-      this.cache.set(cacheKey, {
-        flags,
-        expiresAt: Date.now() + this.options.cacheTtl,
-      });
+    // Cache the result
+    this.cache.set(cacheKey, {
+      flags,
+      expiresAt: Date.now() + this.options.cacheTtl,
+    });
 
-      return flags;
-    } catch (error) {
-      console.error("[PendoProvider] Failed to fetch segment flags:", error);
-      throw error;
-    }
+    return flags;
   }
 
   /**
@@ -371,12 +409,22 @@ export class PendoProvider implements Provider {
 
     const url = `${this.options.baseUrl}/data/segmentflag.json/${this.options.apiKey}?jzb=${jzbPayload}`;
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+    } catch (error) {
+      throw new PendoRuntimeError({
+        message: "Pendo segmentflag request failed",
+        source: "segmentflag",
+        transient: true,
+        cause: error,
+      });
+    }
 
     // Handle Pendo-specific status codes
     if (response.status === 202) {
@@ -385,7 +433,12 @@ export class PendoProvider implements Provider {
     }
 
     if (response.status === 429) {
-      throw new Error("Pendo API rate limit exceeded");
+      throw new PendoRuntimeError({
+        message: "Pendo API rate limit exceeded",
+        source: "segmentflag",
+        status: 429,
+        transient: true,
+      });
     }
 
     if (response.status === 451) {
@@ -394,10 +447,30 @@ export class PendoProvider implements Provider {
     }
 
     if (!response.ok) {
-      throw new Error(`Pendo API error: ${response.status} ${response.statusText}`);
+      throw new PendoRuntimeError({
+        message: `Pendo API error: ${response.status} ${response.statusText}`,
+        source: "segmentflag",
+        status: response.status,
+        transient: isTransientStatus(response.status),
+      });
     }
 
-    const data = (await response.json()) as SegmentFlagResponse;
+    let data: SegmentFlagResponse;
+    try {
+      data = (await response.json()) as SegmentFlagResponse;
+    } catch (error) {
+      // json() throws SyntaxError for malformed JSON; anything else is a body read failure.
+      const malformed = error instanceof SyntaxError;
+      throw new PendoRuntimeError({
+        message: malformed
+          ? "Pendo segmentflag response could not be parsed"
+          : "Pendo segmentflag response body could not be read",
+        source: "segmentflag",
+        status: response.status,
+        transient: !malformed,
+        cause: error,
+      });
+    }
 
     if (data.flags) {
       return Object.entries(data.flags)
@@ -406,6 +479,10 @@ export class PendoProvider implements Provider {
     }
 
     return data.segmentFlags || [];
+  }
+
+  private report(error: PendoRuntimeError): void {
+    reportRuntimeError(error, this.options.onError, "[PendoProvider]");
   }
 
   /**

@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 import { PendoProvider } from "../src/PendoProvider";
+import { PendoRuntimeError } from "../src/errors";
 import { ClientProviderStatus, ProviderEvents } from "@openfeature/web-sdk";
 
 describe("PendoProvider", () => {
@@ -86,8 +87,79 @@ describe("PendoProvider", () => {
 
       expect(shortTimeoutProvider.status).toBe(ClientProviderStatus.READY);
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Pendo not ready within timeout")
+        expect.stringContaining("Pendo not ready within timeout"),
+        ""
       );
+    });
+
+    it("reports the timeout to onError instead of the console", async () => {
+      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
+      const onError = jest.fn();
+
+      const p = new PendoProvider({ readyTimeout: 100, onError });
+      await p.initialize();
+
+      expect(p.status).toBe(ClientProviderStatus.READY);
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0][0];
+      expect(err).toBeInstanceOf(PendoRuntimeError);
+      expect(err.source).toBe("sdk-ready");
+      expect(err.transient).toBe(true);
+      expect(err.status).toBeUndefined();
+      expect(err.message).toContain("Pendo not ready within timeout");
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    });
+
+    it("console.errors both errors when the onError handler throws", async () => {
+      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
+      const handlerError = new Error("handler bug");
+      const onError = jest.fn(() => {
+        throw handlerError;
+      });
+
+      const p = new PendoProvider({ readyTimeout: 100, onError });
+      await expect(p.initialize()).resolves.toBeUndefined();
+
+      expect(p.status).toBe(ClientProviderStatus.READY);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining("onError handler threw"),
+        handlerError
+      );
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining("Original error: Pendo not ready within timeout"),
+        ""
+      );
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
+    });
+
+    it("console.errors both errors when an async onError handler rejects", async () => {
+      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
+      const handlerError = new Error("async handler bug");
+      const onError = jest.fn().mockRejectedValue(handlerError);
+
+      const p = new PendoProvider({ readyTimeout: 100, onError });
+      await expect(p.initialize()).resolves.toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining("onError handler threw or rejected"),
+        handlerError
+      );
+      expect(consoleErrorSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining("Original error: Pendo not ready within timeout"),
+        ""
+      );
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
     });
 
     it("sets up flag change detection via segmentFlagsUpdated event", async () => {
