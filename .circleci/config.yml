@@ -2,13 +2,10 @@ version: 2.1
 
 npmjs-npmrc: &npmjs-npmrc
   name: "Setup NPM config for npmjs.com"
+  # No token: publishing uses npm trusted publishing (OIDC), see publish-npm.
   command: |
     rm ~/.npmrc
     echo "@pendo:registry=https://registry.npmjs.org/" > ~/.npmrc
-    echo "//registry.npmjs.org/:_authToken=${NPM_AUTH_TOKEN}" >> ~/.npmrc
-    echo "//registry.npmjs.org/:email=${NPM_EMAIL}" >> ~/.npmrc
-    echo "//registry.npmjs.org/:username=${NPM_USER}" >> ~/.npmrc
-    echo "//registry.npmjs.org/:always-auth=true" >> ~/.npmrc
     printf "npm registry configured successfully!\n";
 
 orbs:
@@ -82,7 +79,10 @@ commands:
               if npm view "@pendo/openfeature-server-provider@$VERSION" version >/dev/null 2>&1; then
                 echo "@pendo/openfeature-server-provider@$VERSION already published; skipping"
               else
-                npm publish --workspace=@pendo/openfeature-server-provider
+                # npm trusted publishing (OIDC): npm exchanges NPM_ID_TOKEN for a short-lived
+                # publish token. Needs npm >= 11.5.1; the Node 22 image ships npm 10.
+                export NPM_ID_TOKEN=$(circleci run oidc get --claims '{"aud": "npm:registry.npmjs.org"}')
+                npx --yes npm@11 publish --workspace=@pendo/openfeature-server-provider
               fi
       - run:
           name: Publish web-provider
@@ -91,7 +91,10 @@ commands:
               if npm view "@pendo/openfeature-web-provider@$VERSION" version >/dev/null 2>&1; then
                 echo "@pendo/openfeature-web-provider@$VERSION already published; skipping"
               else
-                npm publish --workspace=@pendo/openfeature-web-provider
+                # npm trusted publishing (OIDC): npm exchanges NPM_ID_TOKEN for a short-lived
+                # publish token. Needs npm >= 11.5.1; the Node 22 image ships npm 10.
+                export NPM_ID_TOKEN=$(circleci run oidc get --claims '{"aud": "npm:registry.npmjs.org"}')
+                npx --yes npm@11 publish --workspace=@pendo/openfeature-web-provider
               fi
 
   run-unit-tests:
