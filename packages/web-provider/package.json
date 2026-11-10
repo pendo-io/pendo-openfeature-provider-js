@@ -1,6 +1,6 @@
 {
   "name": "@pendo/openfeature-web-provider",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenFeature provider for Pendo feature flags (web/browser)",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pendo-io/pendo-flags.git",
+    "url": "https://github.com/pendo-io/pendo-openfeature-provider-js.git",
     "directory": "packages/web-provider"
   }
 }

@@ -134,6 +134,8 @@ gh release create v0.3.1 --target main --title v0.3.1 --generate-notes
 
 The published version comes from each package's `package.json`, not from the tag. If a version is already published the publish step is skipped, so a tag without a matching version bump publishes nothing.
 
+Publishing to npm uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers#for-circleci) (OIDC) instead of a long-lived token: the job exchanges a CircleCI OIDC token for a short-lived publish token. Each package has a CircleCI trusted publisher configured on npmjs.com for this project. CircleCI trusted publishing does not produce provenance attestations.
+
 ## License
 
 MIT
